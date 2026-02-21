@@ -1,0 +1,167 @@
+{
+  "sizes": {
+    "mini": {
+      "height": 24,
+      "borderRadius": 7,
+      "padding": 4,
+      "fontSize": 10,
+      "lineHeight": 16,
+      "gap": 4,
+      "iconSize": 12.8,
+      "description": "Compact inline actions"
+    },
+    "small": {
+      "height": 28,
+      "borderRadius": 8,
+      "paddingX": 8,
+      "paddingY": 6,
+      "fontSize": 12,
+      "lineHeight": 16,
+      "gap": 4,
+      "iconSize": 12.8,
+      "description": "Secondary actions, table rows"
+    },
+    "regular": {
+      "height": 32,
+      "borderRadius": 9.6,
+      "paddingX": 12,
+      "paddingY": 6,
+      "fontSize": 14,
+      "lineHeight": 20,
+      "gap": 4,
+      "iconSize": 16,
+      "description": "Default button size"
+    },
+    "medium": {
+      "height": 40,
+      "borderRadius": 12,
+      "paddingX": 18,
+      "paddingY": 8,
+      "fontSize": 16,
+      "lineHeight": 24,
+      "gap": 4,
+      "iconSize": 16,
+      "description": "Prominent actions, form submits"
+    },
+    "large": {
+      "height": 48,
+      "borderRadius": 16,
+      "padding": 18,
+      "fontSize": 20,
+      "lineHeight": 28,
+      "gap": 8,
+      "iconSize": 19.2,
+      "description": "Hero CTAs, primary page actions"
+    },
+    "xlarge": {
+      "height": 60,
+      "borderRadius": 20,
+      "paddingX": 24,
+      "paddingY": 22,
+      "fontSize": 24,
+      "lineHeight": 32,
+      "gap": 8,
+      "iconSize": 22.4,
+      "description": "Landing page hero buttons"
+    }
+  },
+  "variants": {
+    "black": {
+      "bg": "#1D1C1B",
+      "text": "#F4F3F3",
+      "border": "none",
+      "hover": { "bg": "#D3D1CF", "text": "#1D1C1B", "radiusBump": true },
+      "description": "Primary dark button"
+    },
+    "white": {
+      "bg": "#FFFFFF",
+      "text": "#1D1C1B",
+      "border": "none",
+      "hover": { "bg": "#D3D1CF", "text": "#1D1C1B", "radiusBump": true },
+      "description": "Primary light button"
+    },
+    "gray": {
+      "bg": "#E2E2E2",
+      "text": "#1D1C1B",
+      "border": "none",
+      "hover": { "bg": "#BDBCBB", "text": "#1D1C1B", "radiusBump": true },
+      "description": "Neutral button"
+    },
+    "ghosted-black": {
+      "bg": "transparent",
+      "text": "#1D1C1B",
+      "border": "none",
+      "hover": { "bg": "rgba(29,28,27,0.08)", "text": "#1D1C1B" },
+      "description": "Ghost button on light backgrounds"
+    },
+    "ghosted-white": {
+      "bg": "transparent",
+      "text": "#F4F3F3",
+      "border": "none",
+      "hover": { "bg": "rgba(244,243,243,0.12)", "text": "#F4F3F3" },
+      "description": "Ghost button on dark backgrounds"
+    },
+    "blur": {
+      "bg": "rgba(29,28,27,0.01)",
+      "text": "#F4F3F3",
+      "border": "none",
+      "backdrop": "blur(20px)",
+      "hover": { "bg": "rgba(29,28,27,0.08)", "text": "#F4F3F3" },
+      "description": "Frosted glass button"
+    },
+    "black-outline": {
+      "bg": "transparent",
+      "text": "#1D1C1B",
+      "border": "#1D1C1B",
+      "hover": { "bg": "#D3D1CF", "text": "#1D1C1B", "radiusBump": true },
+      "description": "Outlined button on light backgrounds"
+    },
+    "white-outline": {
+      "bg": "transparent",
+      "text": "#F4F3F3",
+      "border": "#F4F3F3",
+      "hover": { "bg": "rgba(244,243,243,0.12)", "text": "#F4F3F3" },
+      "description": "Outlined button on dark backgrounds"
+    },
+    "white-outline-blur": {
+      "bg": "rgba(244,243,243,0.01)",
+      "text": "#F4F3F3",
+      "border": "#F4F3F3",
+      "backdrop": "blur(10px)",
+      "hover": { "bg": "rgba(244,243,243,0.12)", "text": "#F4F3F3" },
+      "description": "Frosted glass outlined button"
+    },
+    "disabled-black": {
+      "bg": "#8F8984",
+      "text": "#F4F3F3",
+      "border": "none",
+      "description": "Disabled state (dark variant)"
+    },
+    "disabled-white": {
+      "bg": "#ECECEC",
+      "text": "#8F8984",
+      "border": "none",
+      "description": "Disabled state (light variant)"
+    },
+    "disabled-outline": {
+      "bg": "transparent",
+      "text": "#8F8984",
+      "border": "#8F8984",
+      "description": "Disabled state (outline variant)"
+    }
+  },
+  "hover": {
+    "radiusBump": "Hover increases border-radius by one token level (e.g., 20px→24px, 16px→20px, 12px→16px, 9.6px→12px, 8px→9.6px, 7px→8px)",
+    "transition": "background-color 200ms ease, border-radius 200ms ease"
+  },
+  "fontFamily": "Milling Duplex 1mm",
+  "figmaSource": {
+    "frameNode": "16043:25456",
+    "xlNode": "16048:26712",
+    "lNode": "16048:26741",
+    "mNode": "16048:26770",
+    "rNode": "16048:26799",
+    "sNode": "16048:26828",
+    "miniNode": "17042:18645"
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "_source": "Figma ICONS-V2 (node 16153:23653)",
+  "_note": "All icons are 16x16 SVG. Playground icons have Default/Selected states.",
+
+  "functional": [
+    "Cross", "Plus", "Minus",
+    "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ArrowDiagonal",
+    "Upload", "Download",
+    "Code", "Link", "CheckBox", "Content",
+    "Camera", "Speech", "Visual", "Sound",
+    "TextInVideo", "LogoInVideo", "Video", "ImageSearch", "Image", "AddVideo",
+    "Globe", "Refresh", "Edit", "Calendar", "Info",
+    "TextDetection", "LogoDetection", "Audio", "Temperature",
+    "QuestionMark", "Play", "Maximize", "Minimize", "Volume",
+    "ChevronLeft", "ChevronRight", "ChevronDown", "ChevronUp", "Check",
+    "ContactSupport", "ContactSales", "Sparkles", "Pegasus",
+    "Python", "Javascript", "Marengo",
+    "Ellipsis", "EyeOff", "Scalable", "PDF", "MagnifyingGlass",
+    "Dummy", "Invite", "Resend", "Menu",
+    "Share", "Pricing", "Logout", "Text", "AT", "X", "Y", "Discord"
+  ],
+
+  "playground": [
+    "Home", "Indexes", "Examples", "MagnifyingGlass", "Settings",
+    "CodeSnippet", "Help", "Collapse", "Search", "Generate", "Embed",
+    "Expand", "Temperature", "Pause", "Play", "Edit", "Spinner",
+    "Copy", "Delete", "Checkmark", "Blank", "RadioBlank", "RadioCheck",
+    "Warning", "Exclamation",
+    "ArrowBoxUp", "ArrowDiagonal", "ArrowBoxDown", "ArrowBoxRight", "ArrowBoxLeft",
+    "Speech", "Devices", "Servers", "Info", "ThumbsUp", "ThumbsDown",
+    "Close", "Text", "Calendar", "APIDoc", "CreateIndex",
+    "VolumeHigh", "VolumeMid", "VolumeLow", "VolumeMute",
+    "Scalable", "Webhooks", "Profile", "Entity", "Integrations",
+    "Billings", "Organizations", "Members", "Usage", "PlayBoxed",
+    "APIKeys", "Indeterminate", "PlayNext", "PlayPrev", "Filter",
+    "EntityCollection", "Share", "Vision", "VisionDisabled",
+    "Grid", "List", "Code", "Idea", "Apps",
+    "AnalyzeV2", "SearchV2", "RevealSecret", "Remove",
+    "RateLimit", "Hourglass", "CustomerWorkflow", "ModelTraining",
+    "NeuralNetwork", "ContactSupport", "Document", "DocumentList",
+    "Transcription", "Canvas"
+  ]
+}

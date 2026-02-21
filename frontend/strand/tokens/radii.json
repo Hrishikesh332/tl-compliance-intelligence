@@ -1,0 +1,12 @@
+{
+  "borderRadius": {
+    "sm": { "value": 4, "description": "Small — chips, badges" },
+    "md": { "value": 8, "description": "Medium — buttons, inputs (Figma: radius-0pt5)" },
+    "lg": { "value": 12, "description": "Large — cards" },
+    "xl": { "value": 16, "description": "Extra large — modals (Figma: radius-1)" },
+    "1.25": { "value": 20, "description": "Feature panels, hero cards (Figma: radius-1pt25)" },
+    "2xl": { "value": 24, "description": "2X large — feature cards (Figma: radius-1pt5)" },
+    "full": { "value": 9999, "description": "Pill shape" }
+  },
+  "heroRadiusRule": "For brand-hero elements, use 30% of shortest side"
+}

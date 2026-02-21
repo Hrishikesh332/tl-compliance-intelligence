@@ -1,0 +1,41 @@
+{
+  "fontFamily": {
+    "brand": {
+      "value": ["Milling Duplex 1mm", "Noto Sans", "Helvetica", "Arial", "sans-serif"],
+      "description": "Primary brand font — used for headings AND body text across playground and marketing site"
+    },
+    "brandBold": {
+      "value": ["Milling Triplex 1mm", "Milling Duplex 1mm", "Noto Sans", "Helvetica", "Arial", "sans-serif"],
+      "description": "Bold brand variant (weight 700) — used for heavy headlines"
+    },
+    "brandXBold": {
+      "value": ["Milling Triplex 1,5mm", "Milling Duplex 1mm", "Noto Sans", "Helvetica", "Arial", "sans-serif"],
+      "description": "Extra-bold brand variant (weight 701+) — used for nav labels like 'Product'"
+    },
+    "system": {
+      "value": ["Noto Sans", "Helvetica", "Arial", "sans-serif"],
+      "description": "UI fallback font — playground uses Noto Sans as primary fallback, not Inter"
+    },
+    "geist": {
+      "value": ["Geist", "Inter", "system-ui", "sans-serif"],
+      "description": "Technical/product UI text — used on marketing site for pricing and technical sections"
+    },
+    "mono": {
+      "value": ["IBM Plex Mono", "monospace"],
+      "description": "Code text"
+    }
+  },
+  "fontSize": {
+    "jumbo": { "value": 64, "lineHeight": 1.1, "fontWeight": 700, "letterSpacing": -3, "description": "Hero headlines" },
+    "h1": { "value": 48, "lineHeight": 1.2, "fontWeight": 700, "letterSpacing": -2, "description": "Page titles" },
+    "h2": { "value": 40, "lineHeight": 1.2, "fontWeight": 600, "letterSpacing": -2, "description": "Section headers (Figma: Desktop/Headline 4)" },
+    "h3": { "value": 32, "lineHeight": 1.3, "fontWeight": 600, "letterSpacing": -1, "description": "Sub-section headers" },
+    "h4": { "value": 24, "lineHeight": 1.33, "fontWeight": 600, "letterSpacing": -1, "description": "Card titles (Figma: Desktop/Headline 6)" },
+    "h5": { "value": 20, "lineHeight": 1.4, "fontWeight": 500, "letterSpacing": 0, "description": "Small headers (Figma: Subtitle1)" },
+    "h6": { "value": 18, "lineHeight": 1.5, "fontWeight": 500, "letterSpacing": 0, "description": "Label headers" },
+    "lg": { "value": 16, "lineHeight": 1.5, "fontWeight": 400, "letterSpacing": 0, "description": "Large body text (Figma: Body1)" },
+    "base": { "value": 14, "lineHeight": 1.43, "fontWeight": 400, "letterSpacing": 0, "description": "Default body text (Figma: Body2)" },
+    "sm": { "value": 12, "lineHeight": 1.33, "fontWeight": 400, "letterSpacing": 0, "description": "Small text, captions (Figma: Body3)" },
+    "xs": { "value": 10, "lineHeight": 1.4, "fontWeight": 500, "letterSpacing": 0, "description": "Micro text, badges" }
+  }
+}

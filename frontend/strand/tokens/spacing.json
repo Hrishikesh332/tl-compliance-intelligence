@@ -1,0 +1,28 @@
+{
+  "spacing": {
+    "1": { "value": 4, "description": "4px — base unit" },
+    "2": { "value": 8, "description": "8px — tight spacing" },
+    "3": { "value": 12, "description": "12px — compact spacing" },
+    "4": { "value": 16, "description": "16px — default spacing" },
+    "5": { "value": 20, "description": "20px — medium spacing" },
+    "6": { "value": 24, "description": "24px — comfortable spacing" },
+    "8": { "value": 32, "description": "32px — section gap" },
+    "10": { "value": 40, "description": "40px — large gap" },
+    "12": { "value": 48, "description": "48px — area separator" },
+    "16": { "value": 64, "description": "64px — page section gap" }
+  },
+  "sizing": {
+    "header": { "value": 56, "description": "App header height" },
+    "sidebar": { "value": 240, "description": "Sidebar width" },
+    "chatMax": { "value": 800, "description": "Chat container max width" },
+    "contentMax": { "value": 1200, "description": "Content area max width" },
+    "buttonMinHeight": { "value": 44, "description": "Minimum button/input touch target" },
+    "inputMinHeight": { "value": 44, "description": "Minimum input height" }
+  },
+  "layout": {
+    "marginPercent": { "value": 4, "description": "4% margins (of shortest side)" },
+    "gutterPercent": { "value": 8, "description": "8% gutters (2x margins)" },
+    "columns": { "value": 12, "description": "12-column grid" },
+    "gridUnit": { "value": 4, "description": "4px base grid unit" }
+  }
+}

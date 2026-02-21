@@ -1,0 +1,143 @@
+{
+  "brand": {
+    "green": { "value": "#00FF00", "description": "Official brand green (marketing, logos). Not for UI — use ui.accent instead." },
+    "charcoal": { "value": "#1D1C1B", "description": "Official brand charcoal (dark backgrounds, primary text)" },
+    "white": { "value": "#F4F3F3", "description": "Brand warm white (page backgrounds)" },
+    "grey": { "value": "#D3D1CF", "description": "Brand light grey (borders, dividers)" }
+  },
+  "masterbrand": {
+    "neutrals": {
+      "white": { "value": "#F4F3F3", "description": "Masterbrand White" },
+      "offWhite": { "value": "#ECECEC", "description": "Masterbrand Off White" },
+      "lightGrey": { "value": "#D3D1CF", "description": "Masterbrand Light Grey" },
+      "midGrey": { "value": "#8F8984", "description": "Masterbrand Mid Grey" },
+      "darkGrey": { "value": "#46423F", "description": "Masterbrand Dark Grey" },
+      "charcoal": { "value": "#1D1C1B", "description": "Masterbrand Charcoal" }
+    },
+    "green": { "value": "#60E21B", "description": "Masterbrand Green" },
+    "greenDark": { "value": "#30710E", "description": "Masterbrand Dark Green" },
+    "greenLight": { "value": "#BFF3A4", "description": "Masterbrand Light Green" },
+    "orange": { "value": "#FABA17", "description": "Masterbrand Orange" },
+    "orangeDark": { "value": "#7D5D0C", "description": "Masterbrand Dark Orange" },
+    "orangeLight": { "value": "#FDE3A2", "description": "Masterbrand Light Orange" },
+    "peach": { "value": "#FFB592", "description": "Masterbrand Peach" },
+    "peachDark": { "value": "#805B49", "description": "Masterbrand Dark Peach" },
+    "peachLight": { "value": "#FFD3BE", "description": "Masterbrand Light Peach" },
+    "pink": { "value": "#FFB0CD", "description": "Masterbrand Pink" },
+    "pinkDark": { "value": "#805867", "description": "Masterbrand Dark Pink" },
+    "pinkLight": { "value": "#FFDFEB", "description": "Masterbrand Light Pink" },
+    "gradient": {
+      "start": "#60E21B",
+      "mid": "#FABA17",
+      "end": "#FFB0CD",
+      "css": "linear-gradient(90deg, #60E21B, #FABA17, #FFB0CD)",
+      "description": "Master Brand Gradient (green to orange to pink)"
+    }
+  },
+  "gray": {
+    "50": { "value": "#F4F3F3", "description": "Lightest gray — page backgrounds (= brand.white)" },
+    "100": { "value": "#ECECEC", "description": "Card backgrounds (Figma: Global/Card Colour)" },
+    "200": { "value": "#E2E2E2", "description": "Subtle borders, hover backgrounds" },
+    "300": { "value": "#D3D1CF", "description": "Line dividers, default borders (= brand.grey)" },
+    "400": { "value": "#BDBCBB", "description": "Placeholder borders (WIP)" },
+    "500": { "value": "#8F8984", "description": "Muted text, icons (WIP)" },
+    "600": { "value": "#46423F", "description": "Secondary text, labels (WIP)" },
+    "700": { "value": "#1D1C1B", "description": "Primary text (= brand.charcoal)" }
+  },
+  "system": {
+    "error": {
+      "dark": { "value": "#9D422B", "description": "Dark Red (Error)" },
+      "DEFAULT": { "value": "#E22622", "description": "Red (Error)" },
+      "light": { "value": "#FFCCC0", "description": "Light Red (Error)" }
+    },
+    "warning": {
+      "dark": { "value": "#7D5D0C", "description": "Dark Orange (Warning)" },
+      "DEFAULT": { "value": "#FABA17", "description": "Orange (Warning)" },
+      "light": { "value": "#FDE3A2", "description": "Light Orange (Warning)" }
+    },
+    "success": {
+      "dark": { "value": "#30710E", "description": "Dark Green (Success)" },
+      "DEFAULT": { "value": "#60E21B", "description": "Green (Success)" },
+      "light": { "value": "#BFF3A4", "description": "Light Green (Success)" }
+    },
+    "info": {
+      "dark": { "value": "#366B7F", "description": "Dark Blue (Info)" },
+      "DEFAULT": { "value": "#6CD5FD", "description": "Blue (Info)" },
+      "light": { "value": "#C4EEFE", "description": "Light Blue (Info)" }
+    }
+  },
+  "ui": {
+    "background": { "value": "#F4F3F3", "description": "Page background (Figma: Global/Background)" },
+    "surface": { "value": "#FFFFFF", "description": "Cards, inputs, elevated surfaces (Figma: Global/Card Colour2)" },
+    "card": { "value": "#ECECEC", "description": "Default card background (Figma: Global/Card Colour)" },
+    "text": {
+      "primary": { "value": "#1D1C1B", "description": "Body text, headings (Figma: Global/Text)" },
+      "secondary": { "value": "#6B6966", "description": "Muted text, labels" },
+      "tertiary": { "value": "#9B9895", "description": "Placeholders, timestamps" },
+      "inverse": { "value": "#FFFFFF", "description": "Text on dark backgrounds (Figma: Global/White)" }
+    },
+    "border": {
+      "default": { "value": "#D3D1CF", "description": "Default borders, dividers (Figma: Global/Line Colour)" },
+      "light": { "value": "#E8E7E5", "description": "Subtle borders" }
+    },
+    "accent": {
+      "default": { "value": "#00DC82", "description": "UI green — WCAG-safe derivative of brand green" },
+      "hover": { "value": "#00B86E", "description": "Hover/active state" },
+      "light": { "value": "#E8F5E9", "description": "Light accent tint for backgrounds" }
+    },
+    "highlight": { "value": "#60E21B", "description": "Highlight green for CTAs and emphasis (Figma: Global/Highlight)" },
+    "error": { "value": "#E22622", "description": "Error states (Figma: System/Red)" },
+    "warning": { "value": "#FABA17", "description": "Warning states (Figma: System/Orange)" },
+    "success": { "value": "#60E21B", "description": "Success states (Figma: System/Green)" },
+    "info": { "value": "#6CD5FD", "description": "Informational states (Figma: System/Blue)" },
+    "destructive": { "value": "#E22622", "description": "Destructive actions (= system.error)" }
+  },
+  "product": {
+    "search": {
+      "dark": { "value": "#7B5880", "description": "Search product line — dark purple" },
+      "DEFAULT": { "value": "#F6AFFF", "description": "Search product line — medium purple" },
+      "light": { "value": "#FBDFFF", "description": "Search product line — light purple" }
+    },
+    "generate": {
+      "dark": { "value": "#7D5D0C", "description": "Generate product line — dark orange" },
+      "DEFAULT": { "value": "#FABA17", "description": "Generate product line — medium orange" },
+      "light": { "value": "#FDE3A2", "description": "Generate product line — light orange" }
+    },
+    "embed": {
+      "dark": { "value": "#366B7F", "description": "Embed product line — dark blue" },
+      "DEFAULT": { "value": "#6CD5FD", "description": "Embed product line — medium blue" },
+      "light": { "value": "#C4EEFE", "description": "Embed product line — light blue" }
+    }
+  },
+  "dark": {
+    "background": { "value": "#1D1C1B", "description": "Dark mode page background (charcoal)" },
+    "surface": { "value": "#2A2928", "description": "Dark mode cards, inputs, elevated surfaces" },
+    "card": { "value": "#333231", "description": "Dark mode card background" },
+    "text": {
+      "primary": { "value": "#F4F3F3", "description": "Dark mode body text, headings" },
+      "secondary": { "value": "#9B9895", "description": "Dark mode muted text, labels" },
+      "tertiary": { "value": "#6B6966", "description": "Dark mode placeholders, timestamps" },
+      "inverse": { "value": "#1D1C1B", "description": "Dark mode text on light backgrounds" }
+    },
+    "border": {
+      "default": { "value": "#45423F", "description": "Dark mode default borders, dividers" },
+      "light": { "value": "#333231", "description": "Dark mode subtle borders" }
+    },
+    "accent": {
+      "default": { "value": "#00DC82", "description": "UI green (same in dark mode)" },
+      "hover": { "value": "#00B86E", "description": "Hover/active state (same in dark mode)" },
+      "light": { "value": "#1A3D2A", "description": "Dark mode accent tint for backgrounds" }
+    }
+  },
+  "slide": {
+    "gradient": {
+      "start": { "value": "#16DF84", "description": "Brand gradient start (slides)" },
+      "end": { "value": "#00D67E", "description": "Brand gradient end (slides)" }
+    },
+    "grey": {
+      "light": { "value": "#F5F5F5", "description": "Light grey (slide backgrounds)" },
+      "medium": { "value": "#666666", "description": "Medium grey (secondary text on slides)" },
+      "dark": { "value": "#333333", "description": "Dark grey (body text on slides)" }
+    }
+  }
+}

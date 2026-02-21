@@ -1,0 +1,99 @@
+:root {
+  --strand-brand-green: #00FF00;
+  --strand-brand-charcoal: #1D1C1B;
+  --strand-brand-white: #F4F3F3;
+  --strand-brand-grey: #D3D1CF;
+
+  --strand-gray-50: #F4F3F3;
+  --strand-gray-100: #ECECEC;
+  --strand-gray-200: #E2E2E2;
+  --strand-gray-300: #D3D1CF;
+  --strand-gray-400: #BDBCBB;
+  --strand-gray-500: #8F8984;
+  --strand-gray-600: #45423F;
+  --strand-gray-700: #1D1C1B;
+
+  --strand-ui-background: #F4F3F3;
+  --strand-ui-surface: #FFFFFF;
+  --strand-ui-card: #ECECEC;
+  --strand-ui-text-primary: #1D1C1B;
+  --strand-ui-text-secondary: #6B6966;
+  --strand-ui-text-tertiary: #9B9895;
+  --strand-ui-text-inverse: #FFFFFF;
+  --strand-ui-border: #D3D1CF;
+  --strand-ui-border-light: #E8E7E5;
+  --strand-ui-accent: #00DC82;
+  --strand-ui-accent-hover: #00B86E;
+  --strand-ui-accent-light: #E8F5E9;
+  --strand-ui-highlight: #60E21B;
+  --strand-ui-error: #DC2626;
+  --strand-ui-warning: #F59E0B;
+  --strand-ui-success: #00DC82;
+  --strand-ui-info: #3B82F6;
+  --strand-ui-destructive: #E22E22;
+
+  --strand-product-search-dark: #7B5880;
+  --strand-product-search: #F6AFFF;
+  --strand-product-search-light: #FBDFFF;
+  --strand-product-generate-dark: #7D5D0C;
+  --strand-product-generate: #FABA17;
+  --strand-product-generate-light: #FDE3A2;
+  --strand-product-embed-dark: #366B7F;
+  --strand-product-embed: #6CD5FD;
+  --strand-product-embed-light: #C4EEFE;
+
+  --strand-slide-gradient-start: #16DF84;
+  --strand-slide-gradient-end: #00D67E;
+  --strand-slide-grey-light: #F5F5F5;
+  --strand-slide-grey-medium: #666666;
+  --strand-slide-grey-dark: #333333;
+
+  --strand-font-brand: 'Milling Duplex 1mm', 'Noto Sans', Helvetica, Arial, sans-serif;
+  --strand-font-brand-bold: 'Milling Triplex 1mm', 'Milling Duplex 1mm', 'Noto Sans', Helvetica, Arial, sans-serif;
+  --strand-font-brand-xbold: 'Milling Triplex 1,5mm', 'Milling Duplex 1mm', 'Noto Sans', Helvetica, Arial, sans-serif;
+  --strand-font-system: 'Noto Sans', Helvetica, Arial, sans-serif;
+  --strand-font-geist: 'Geist', 'Inter', system-ui, sans-serif;
+  --strand-font-mono: 'IBM Plex Mono', monospace;
+
+  --strand-text-jumbo: 64px;
+  --strand-text-h1: 48px;
+  --strand-text-h2: 40px;
+  --strand-text-h3: 32px;
+  --strand-text-h4: 24px;
+  --strand-text-h5: 20px;
+  --strand-text-h6: 18px;
+  --strand-text-lg: 16px;
+  --strand-text-base: 14px;
+  --strand-text-sm: 12px;
+  --strand-text-xs: 10px;
+
+  --strand-space-1: 4px;
+  --strand-space-2: 8px;
+  --strand-space-3: 12px;
+  --strand-space-4: 16px;
+  --strand-space-5: 20px;
+  --strand-space-6: 24px;
+  --strand-space-8: 32px;
+  --strand-space-10: 40px;
+  --strand-space-12: 48px;
+  --strand-space-16: 64px;
+
+  --strand-size-header: 56px;
+  --strand-size-sidebar: 240px;
+  --strand-size-chat-max: 800px;
+  --strand-size-content-max: 1200px;
+  --strand-size-button-min: 44px;
+  --strand-size-input-min: 44px;
+
+  --strand-radius-sm: 4px;
+  --strand-radius-md: 8px;
+  --strand-radius-lg: 12px;
+  --strand-radius-xl: 16px;
+  --strand-radius-1pt25: 20px;
+  --strand-radius-2xl: 24px;
+  --strand-radius-full: 9999px;
+
+  --strand-shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+  --strand-shadow-md: 0 4px 6px rgba(0,0,0,0.07);
+  --strand-shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
+}
