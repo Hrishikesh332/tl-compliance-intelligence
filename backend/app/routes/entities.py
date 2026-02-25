@@ -1,0 +1,62 @@
+from flask import Blueprint, jsonify, request
+
+from app.services.bedrock_marengo import embed_image, media_source_base64
+from app.services.vector_store import FIXED_INDEX_ID, add as index_add, list_entries as index_list, get_entry as index_get_entry
+
+from app.utils.faces import detect_and_crop_faces
+
+entities_bp = Blueprint("entities", __name__)
+
+
+@entities_bp.route("/entities", methods=["GET"])
+def api_list_entities():
+    raw = index_list(type_filter="entity")
+    entities = []
+    for rec in raw:
+        eid = rec.get("id")
+        if not eid:
+            continue
+        full = index_get_entry(eid)
+        if not full or not full.get("embedding"):
+            continue
+        meta = full.get("metadata") or {}
+        entities.append({
+            "id": full["id"],
+            "type": full.get("type", "entity"),
+            "metadata": meta,
+        })
+    return jsonify({"indexId": FIXED_INDEX_ID, "count": len(entities), "entities": entities})
+
+
+@entities_bp.route("/entities/from-image", methods=["POST"])
+def api_entities_from_image():
+    if "image" not in request.files:
+        return jsonify({"error": "No 'image' file provided"}), 400
+    file = request.files["image"]
+    if file.filename == "":
+        return jsonify({"error": "Empty filename"}), 400
+    data = request.form or {}
+    name = data.get("name") or (request.get_json(silent=True) or {}).get("name") or ""
+    if not name.strip():
+        return jsonify({"error": "Missing 'name'"}), 400
+    image_bytes = file.read()
+    faces = detect_and_crop_faces(image_bytes)
+    if not faces:
+        return jsonify({"error": "No face detected in image. Use a clear, front-facing photo with good lighting."}), 404
+    best = faces[0]
+    face_b64 = best["image_base64"]
+    embed_b64 = best.get("embedding_crop_base64") or face_b64
+    import base64
+    face_bytes = base64.b64decode(embed_b64)
+    media = media_source_base64(face_bytes)
+    try:
+        embedding = embed_image(media)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    entity_id = name.strip().lower().replace(" ", "-")
+    rec = index_add(id=entity_id, embedding=embedding, metadata={"name": name.strip(), "face_snap_base64": face_b64}, type="entity")
+    return jsonify({
+        "indexId": FIXED_INDEX_ID,
+        "entity": {"id": rec["id"], "name": name.strip()},
+        "face_snap_base64": face_b64,
+    })

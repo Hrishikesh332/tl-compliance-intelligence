@@ -1,5 +1,7 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
 function IconClose({ className = 'w-5 h-5' }: { className?: string }) {
   return (
@@ -27,96 +29,143 @@ interface UploadVideosModalProps {
 export default function UploadVideosModal({ open, onClose }: UploadVideosModalProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
+  const [files, setFiles] = useState<File[]>([])
+  const [uploading, setUploading] = useState(false)
+  const [progress, setProgress] = useState<Record<string, 'pending' | 'uploading' | 'done' | 'error'>>({})
+  const [error, setError] = useState<string | null>(null)
 
   if (!open) return null
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    onClose()
-    navigate('/')
+  function handleFiles(selected: FileList | null) {
+    if (!selected) return
+    const valid = Array.from(selected).filter((f) => f.type.startsWith('video/'))
+    if (valid.length) {
+      setFiles((prev) => [...prev, ...valid])
+      setError(null)
+    }
   }
 
-  function triggerFileInput() {
-    inputRef.current?.click()
+  function removeFile(idx: number) {
+    setFiles((prev) => prev.filter((_, i) => i !== idx))
+  }
+
+  async function handleUpload() {
+    if (!files.length) return
+    setUploading(true)
+    setError(null)
+    const newProgress: Record<string, 'pending' | 'uploading' | 'done' | 'error'> = {}
+    files.forEach((f) => { newProgress[f.name] = 'pending' })
+    setProgress({ ...newProgress })
+
+    let allOk = true
+    for (const file of files) {
+      newProgress[file.name] = 'uploading'
+      setProgress({ ...newProgress })
+      try {
+        const formData = new FormData()
+        formData.append('video', file)
+        const resp = await fetch(`${API_BASE}/api/videos/upload`, { method: 'POST', body: formData })
+        if (!resp.ok) {
+          const data = await resp.json().catch(() => ({}))
+          throw new Error(data.error || `HTTP ${resp.status}`)
+        }
+        newProgress[file.name] = 'done'
+      } catch (e: any) {
+        newProgress[file.name] = 'error'
+        allOk = false
+        setError(e.message || 'Upload failed')
+      }
+      setProgress({ ...newProgress })
+    }
+
+    setUploading(false)
+    if (allOk) {
+      setFiles([])
+      setProgress({})
+      onClose()
+      navigate('/')
+    }
+  }
+
+  function handleClose() {
+    if (!uploading) {
+      setFiles([])
+      setProgress({})
+      setError(null)
+      onClose()
+    }
   }
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-      <div
-        className="absolute inset-0 bg-brand-charcoal/40 backdrop-blur-sm"
-        onClick={onClose}
-        aria-hidden
-      />
-      <div
-        className="relative w-full max-w-md rounded-xl border border-border bg-surface shadow-xl"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="upload-modal-title"
-      >
+      <div className="absolute inset-0 bg-brand-charcoal/40 backdrop-blur-sm" onClick={handleClose} aria-hidden />
+      <div className="relative w-full max-w-md rounded-xl border border-border bg-surface shadow-xl" role="dialog" aria-modal="true" aria-labelledby="upload-modal-title">
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
-          <h2 id="upload-modal-title" className="text-lg font-semibold text-text-primary">
-            Upload videos
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 rounded-lg text-text-tertiary hover:bg-card hover:text-text-primary transition-colors"
-            aria-label="Close"
-          >
+          <h2 id="upload-modal-title" className="text-lg font-semibold text-text-primary">Upload videos</h2>
+          <button type="button" onClick={handleClose} disabled={uploading} className="p-2 rounded-lg text-text-tertiary hover:bg-card hover:text-text-primary transition-colors disabled:opacity-50" aria-label="Close">
             <IconClose />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-5">
-          <input
-            ref={inputRef}
-            type="file"
-            accept="video/*"
-            multiple
-            className="hidden"
-          />
-          <button
-            type="button"
-            onClick={triggerFileInput}
-            className="w-full rounded-xl border-2 border-dashed border-border bg-card py-12 px-6 flex flex-col items-center gap-4 text-text-tertiary hover:border-accent hover:bg-accent/5 hover:text-text-secondary transition-colors"
-          >
-            <div className="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center">
-              <IconUpload className="w-6 h-6 text-gray-500" />
-            </div>
-            <span className="text-sm font-medium">Click to select or drag and drop</span>
-            <span className="text-xs">Video files (MP4, WebM, etc.)</span>
-            <div className="flex flex-wrap justify-center gap-2 mt-1" aria-label="Video requirements">
-              <span className="rounded-lg border border-brand-charcoal bg-transparent px-3 py-2 text-sm text-text-primary">
-                Duration 4sec–1hr
-              </span>
-              <span className="rounded-lg border border-brand-charcoal bg-transparent px-3 py-2 text-sm text-text-primary">
-                Resolution 360p–4k
-              </span>
-              <span className="rounded-lg border border-brand-charcoal bg-transparent px-3 py-2 text-sm text-text-primary">
-                Ratio 1:1–1:2.4
-              </span>
-              <span className="rounded-lg border border-brand-charcoal bg-transparent px-3 py-2 text-sm text-text-primary">
-                File size 100 MB per video
-              </span>
-            </div>
-          </button>
+        <div className="p-5">
+          <input ref={inputRef} type="file" accept="video/*" multiple className="hidden" onChange={(e) => handleFiles(e.target.files)} />
 
-          <div className="mt-5 flex justify-end gap-2">
+          {files.length === 0 ? (
             <button
               type="button"
-              onClick={onClose}
-              className="h-8 px-3 rounded-[9.6px] text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 transition-colors"
+              onClick={() => inputRef.current?.click()}
+              className="w-full rounded-xl border-2 border-dashed border-border bg-card py-12 px-6 flex flex-col items-center gap-4 text-text-tertiary hover:border-accent hover:bg-accent/5 hover:text-text-secondary transition-colors"
             >
+              <div className="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center">
+                <IconUpload className="w-6 h-6 text-gray-500" />
+              </div>
+              <span className="text-sm font-medium">Click to select or drag and drop</span>
+              <span className="text-xs">Video files (MP4, WebM, etc.) — max 300 MB each</span>
+            </button>
+          ) : (
+            <div className="space-y-2 max-h-60 overflow-y-auto">
+              {files.map((f, i) => {
+                const status = progress[f.name]
+                return (
+                  <div key={`${f.name}-${i}`} className="flex items-center gap-3 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">{f.name}</p>
+                      <p className="text-xs text-gray-500">{(f.size / (1024 * 1024)).toFixed(1)} MB</p>
+                    </div>
+                    {status === 'uploading' && <div className="w-4 h-4 border-2 border-gray-300 border-t-gray-800 rounded-full animate-spin shrink-0" />}
+                    {status === 'done' && <span className="text-green-600 text-sm shrink-0">Done</span>}
+                    {status === 'error' && <span className="text-red-600 text-sm shrink-0">Failed</span>}
+                    {!status && !uploading && (
+                      <button type="button" onClick={() => removeFile(i)} className="text-gray-400 hover:text-gray-700 shrink-0 text-sm">Remove</button>
+                    )}
+                  </div>
+                )
+              })}
+              {!uploading && (
+                <button type="button" onClick={() => inputRef.current?.click()} className="w-full py-2 text-sm text-gray-500 hover:text-gray-700 underline underline-offset-2">
+                  + Add more files
+                </button>
+              )}
+            </div>
+          )}
+
+          {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+
+          <div className="mt-5 flex justify-end gap-2">
+            <button type="button" onClick={handleClose} disabled={uploading} className="h-8 px-3 rounded-[9.6px] text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 transition-colors disabled:opacity-50">
               Cancel
             </button>
             <button
-              type="submit"
-              className="h-8 px-3 rounded-[9.6px] text-sm font-medium bg-brand-charcoal text-brand-white hover:bg-gray-700 transition-colors"
+              type="button"
+              onClick={handleUpload}
+              disabled={!files.length || uploading}
+              className="h-8 px-3 rounded-[9.6px] text-sm font-medium bg-brand-charcoal text-brand-white hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
             >
-              Upload
+              {uploading && <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+              {uploading ? 'Uploading...' : `Upload ${files.length || ''}`}
             </button>
           </div>
-        </form>
+        </div>
       </div>
     </div>
   )

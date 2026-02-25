@@ -20,6 +20,8 @@ type Mention = {
 export type PersonLinkData = {
   personName: string
   personInitials: string
+  /** Base64 face image for the person (from video or registration); shown as circle in graph and sidebar */
+  personFaceBase64?: string | null
   mentionCount: number
   mentions: Mention[]
   linkedNodes: LinkNode[]
@@ -101,7 +103,26 @@ function IconClose({ className = 'w-5 h-5' }: { className?: string }) {
   )
 }
 
-function MentionList({ mentions, selectedNodeId }: { mentions: Mention[]; selectedNodeId: string | null }) {
+function parseTimestampToSeconds(ts: string): number | null {
+  if (!ts || typeof ts !== 'string') return null
+  const parts = ts.trim().split(':').map((p) => parseInt(p, 10))
+  if (parts.length === 1 && !Number.isNaN(parts[0])) return parts[0]
+  if (parts.length === 2 && !Number.isNaN(parts[0]) && !Number.isNaN(parts[1])) return parts[0] * 60 + parts[1]
+  if (parts.length === 3 && !Number.isNaN(parts[0]) && !Number.isNaN(parts[1]) && !Number.isNaN(parts[2])) return parts[0] * 3600 + parts[1] * 60 + parts[2]
+  return null
+}
+
+function MentionList({
+  mentions,
+  selectedNodeId,
+  title = 'In this video',
+  onSeekToTime,
+}: {
+  mentions: Mention[]
+  selectedNodeId: string | null
+  title?: string
+  onSeekToTime?: (seconds: number) => void
+}) {
   const highlightedRef = useRef<HTMLLIElement | null>(null)
 
   useEffect(() => {
@@ -111,31 +132,50 @@ function MentionList({ mentions, selectedNodeId }: { mentions: Mention[]; select
   }, [selectedNodeId])
 
   return (
-    <ul className="flex-1 overflow-y-auto divide-y divide-gray-200" role="list">
-      {mentions.map((m, i) => {
-        const isHighlighted = selectedNodeId != null && m.nodeId === selectedNodeId
-        return (
-          <li
-            key={i}
-            ref={isHighlighted ? (el) => { highlightedRef.current = el } : undefined}
-            className={`px-4 py-3 transition-colors duration-200 ${
-              isHighlighted
-                ? 'bg-accent/10 border-l-4 border-accent -ml-px pl-[15px] rounded-r-lg'
-                : ''
-            }`}
-            aria-current={isHighlighted ? 'true' : undefined}
-          >
-            <p className="text-sm text-gray-700 leading-relaxed mb-1.5">{m.text}</p>
-            <p className="text-xs text-gray-500">
-              <span className="font-medium">Timestamp:</span> {m.timestamp}
-            </p>
-            <p className="text-xs text-gray-500">
-              <span className="font-medium">Address:</span> {m.address}
-            </p>
-          </li>
-        )
-      })}
-    </ul>
+    <div className="flex flex-col flex-1 min-h-0">
+      <p className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide shrink-0">{title}</p>
+      <ul className="flex-1 overflow-y-auto divide-y divide-gray-200" role="list">
+        {mentions.length === 0 ? (
+          <li className="px-4 py-3 text-sm text-gray-500">No mentions in this video</li>
+        ) : (
+          mentions.map((m, i) => {
+            const isHighlighted = selectedNodeId != null && m.nodeId === selectedNodeId
+            const seconds = parseTimestampToSeconds(m.timestamp)
+            return (
+              <li
+                key={i}
+                ref={isHighlighted ? (el) => { highlightedRef.current = el } : undefined}
+                className={`px-4 py-3 transition-colors duration-200 ${
+                  isHighlighted
+                    ? 'bg-accent/10 border-l-4 border-accent -ml-px pl-[15px] rounded-r-lg'
+                    : ''
+                }`}
+                aria-current={isHighlighted ? 'true' : undefined}
+              >
+                <p className="text-sm text-gray-700 leading-relaxed mb-1.5">{m.text}</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-medium text-accent tabular-nums">{m.timestamp}</span>
+                  {onSeekToTime != null && seconds != null && (
+                    <button
+                      type="button"
+                      onClick={() => onSeekToTime(seconds)}
+                      className="text-xs font-medium text-accent hover:underline"
+                    >
+                      Go to time
+                    </button>
+                  )}
+                </div>
+                {m.address ? (
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    <span className="font-medium">Address:</span> {m.address}
+                  </p>
+                ) : null}
+              </li>
+            )
+          })
+        )}
+      </ul>
+    </div>
   )
 }
 
@@ -143,15 +183,19 @@ export default function LinkAnalysisModal({
   open,
   onClose,
   data,
+  onSeekToTime,
 }: {
   open: boolean
   onClose: () => void
   data: PersonLinkData
+  /** When provided, mention list shows "Go to time" and seeks the video to that timestamp */
+  onSeekToTime?: (seconds: number) => void
 }) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   if (!open) return null
 
   const positions = getNodePositions(data.linkedNodes.length)
+  const personPhotoUrl = data.personFaceBase64 ? `data:image/png;base64,${data.personFaceBase64}` : null
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
@@ -179,15 +223,23 @@ export default function LinkAnalysisModal({
         <div className="flex-1 flex min-h-0">
           <aside className="w-72 shrink-0 border-r border-gray-200 flex flex-col bg-gray-50/80 overflow-hidden">
             <div className="px-4 pt-4 pb-3 border-b border-gray-200 shrink-0">
-              <div className="flex items-center gap-2 mb-1">
-                <PersonIcon className="w-5 h-5 text-accent" />
-                <h3 className="text-sm font-semibold text-gray-900">{data.personName}</h3>
+              <div className="flex items-center gap-3 mb-1">
+                {personPhotoUrl ? (
+                  <div className="w-10 h-10 rounded-full overflow-hidden bg-gray-200 shrink-0 ring-2 ring-accent/30">
+                    <img src={personPhotoUrl} alt="" className="w-full h-full object-cover" />
+                  </div>
+                ) : (
+                  <PersonIcon className="w-5 h-5 text-accent shrink-0" />
+                )}
+                <h3 className="text-sm font-semibold text-gray-900 truncate">{data.personName}</h3>
               </div>
-              <p className="text-xs text-gray-500">Mentioned {data.mentionCount} times</p>
+              <p className="text-xs text-gray-500">Mentioned {data.mentionCount} time{data.mentionCount !== 1 ? 's' : ''} in this video</p>
             </div>
             <MentionList
               mentions={data.mentions}
               selectedNodeId={selectedNodeId}
+              title="Mentions in this video"
+              onSeekToTime={onSeekToTime}
             />
           </aside>
 
@@ -208,11 +260,29 @@ export default function LinkAnalysisModal({
                 />
               ))}
 
+              <defs>
+                <clipPath id="link-analysis-center-person-clip">
+                  <circle cx={CX} cy={CY} r="32" />
+                </clipPath>
+              </defs>
               <g className="cursor-default">
                 <circle cx={CX} cy={CY} r="32" className="fill-accent/10 stroke-accent" strokeWidth="2" />
-                <foreignObject x={CX - 12} y={CY - 18} width="24" height="24">
-                  <PersonIcon className="w-6 h-6 text-accent" />
-                </foreignObject>
+                {personPhotoUrl ? (
+                  <g clipPath="url(#link-analysis-center-person-clip)">
+                    <image
+                      href={personPhotoUrl}
+                      x={CX - 32}
+                      y={CY - 32}
+                      width="64"
+                      height="64"
+                      preserveAspectRatio="xMidYMid slice"
+                    />
+                  </g>
+                ) : (
+                  <foreignObject x={CX - 12} y={CY - 18} width="24" height="24">
+                    <PersonIcon className="w-6 h-6 text-accent" />
+                  </foreignObject>
+                )}
                 <text x={CX} y={CY + 26} textAnchor="middle" className="fill-gray-900 text-[11px] font-semibold">
                   {data.personName}
                 </text>

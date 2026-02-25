@@ -1,5 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+
 function IconClose({ className = 'w-5 h-5' }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 12 12" fill="currentColor">
@@ -18,6 +20,26 @@ function IconUpload({ className = 'w-5 h-5' }: { className?: string }) {
   )
 }
 
+function IconChevronLeft({ className = 'w-4 h-4' }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+    </svg>
+  )
+}
+
+const backButtonClass =
+  'inline-flex items-center gap-2 h-9 px-3 rounded-lg border border-border bg-surface text-sm font-medium text-text-secondary hover:bg-card hover:text-text-primary transition-colors'
+
+function BackButton({ onClick, label = 'Back' }: { onClick: () => void; label?: string }) {
+  return (
+    <button type="button" onClick={onClick} className={backButtonClass} aria-label={label}>
+      <IconChevronLeft className="w-4 h-4 shrink-0" />
+      {label}
+    </button>
+  )
+}
+
 const MIN_CROP_SIZE = 60
 const MAX_CROP_SIZE = 280
 
@@ -28,11 +50,20 @@ interface CropRect {
   height: number
 }
 
+interface DetectedFace {
+  index: number
+  confidence: number
+  bbox: { x: number; y: number; w: number; h: number }
+  image_base64: string
+}
+
 export interface EntitySelection {
-  file: File
-  crop: CropRect
+  file?: File
+  crop?: CropRect
   previewUrl: string
   name?: string
+  faceBase64?: string
+  id?: string
 }
 
 interface AddEntityModalProps {
@@ -41,12 +72,26 @@ interface AddEntityModalProps {
   onEntityAdded?: (selection: EntitySelection) => void
 }
 
+type ExistingEntity = { id: string; name: string; previewUrl: string }
+
 export default function AddEntityModal({ open, onClose, onEntityAdded }: AddEntityModalProps) {
   const inputRef = useRef<HTMLInputElement>(null)
-  const [step, setStep] = useState<'upload' | 'choose' | 'crop'>('upload')
+  const [choice, setChoice] = useState<'existing' | 'new' | null>(null)
+  const [step, setStep] = useState<'upload' | 'detect' | 'crop'>('upload')
   const [entityName, setEntityName] = useState('')
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
+
+  const [existingEntities, setExistingEntities] = useState<ExistingEntity[]>([])
+  const [existingLoading, setExistingLoading] = useState(false)
+  const [existingError, setExistingError] = useState<string | null>(null)
+
+  const [detectedFaces, setDetectedFaces] = useState<DetectedFace[]>([])
+  const [isDetecting, setIsDetecting] = useState(false)
+  const [detectError, setDetectError] = useState<string | null>(null)
+  const [selectedFaceIdx, setSelectedFaceIdx] = useState<number | null>(null)
+  const [isRegistering, setIsRegistering] = useState(false)
+
   const [crop, setCrop] = useState<CropRect>({ x: 80, y: 60, width: 120, height: 120 })
   const [isDragging, setIsDragging] = useState(false)
   const [isResizing, setIsResizing] = useState(false)
@@ -56,13 +101,43 @@ export default function AddEntityModal({ open, onClose, onEntityAdded }: AddEnti
 
   useEffect(() => {
     if (!open) {
+      setChoice(null)
       setStep('upload')
       setEntityName('')
       setImageFile(null)
       if (imagePreview) URL.revokeObjectURL(imagePreview)
       setImagePreview(null)
+      setExistingEntities([])
+      setExistingError(null)
+      setDetectedFaces([])
+      setIsDetecting(false)
+      setDetectError(null)
+      setSelectedFaceIdx(null)
+      setIsRegistering(false)
     }
   }, [open])
+
+  const fetchExistingEntities = useCallback(() => {
+    setExistingLoading(true)
+    setExistingError(null)
+    fetch(`${API_BASE}/api/entities`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Failed to load'))))
+      .then((data) => {
+        const list: ExistingEntity[] = (data.entities || []).map((e: any) => {
+          const meta = e.metadata || {}
+          const faceB64 = meta.face_snap_base64
+          const previewUrl = faceB64 ? `data:image/png;base64,${faceB64}` : ''
+          return { id: e.id, name: meta.name || e.id, previewUrl }
+        })
+        setExistingEntities(list)
+      })
+      .catch(() => setExistingError('Could not load entities.'))
+      .finally(() => setExistingLoading(false))
+  }, [])
+
+  useEffect(() => {
+    if (open && choice === 'existing') fetchExistingEntities()
+  }, [open, choice, fetchExistingEntities])
 
   useEffect(() => {
     return () => {
@@ -70,20 +145,45 @@ export default function AddEntityModal({ open, onClose, onEntityAdded }: AddEnti
     }
   }, [imagePreview])
 
+  useEffect(() => {
+    if (step !== 'detect' || !imageFile || detectedFaces.length > 0 || isDetecting || detectError) return
+    setIsDetecting(true)
+    const formData = new FormData()
+    formData.append('image', imageFile)
+    fetch(`${API_BASE}/api/detect-faces`, { method: 'POST', body: formData })
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return res.json()
+      })
+      .then(data => {
+        if (data.faces?.length > 0) {
+          setDetectedFaces(data.faces)
+          setSelectedFaceIdx(0)
+        } else {
+          setDetectError('No faces detected in the image.')
+        }
+      })
+      .catch(() => setDetectError('Could not connect to the detection service.'))
+      .finally(() => setIsDetecting(false))
+  }, [step, imageFile, detectedFaces.length, isDetecting, detectError])
+
   const handleFileSelect = useCallback((file: File) => {
     if (!file.type.startsWith('image/')) return
     if (imagePreview) URL.revokeObjectURL(imagePreview)
     setImageFile(file)
     setImagePreview(URL.createObjectURL(file))
-    setStep('choose')
+    setDetectedFaces([])
+    setDetectError(null)
+    setSelectedFaceIdx(null)
+    setStep('detect')
     setCrop({ x: 80, y: 60, width: 120, height: 120 })
   }, [imagePreview])
 
   const clampCrop = useCallback((c: CropRect, maxW: number, maxH: number): CropRect => {
     const w = Math.max(MIN_CROP_SIZE, Math.min(MAX_CROP_SIZE, c.width))
     const h = Math.max(MIN_CROP_SIZE, Math.min(MAX_CROP_SIZE, c.height))
-    let x = Math.max(0, Math.min(maxW - w, c.x))
-    let y = Math.max(0, Math.min(maxH - h, c.y))
+    const x = Math.max(0, Math.min(maxW - w, c.x))
+    const y = Math.max(0, Math.min(maxH - h, c.y))
     return { x, y, width: w, height: h }
   }, [])
 
@@ -143,6 +243,34 @@ export default function AddEntityModal({ open, onClose, onEntityAdded }: AddEnti
     inputRef.current?.click()
   }
 
+  function handleAutoConfirm() {
+    if (!imageFile || selectedFaceIdx === null || !detectedFaces[selectedFaceIdx] || !entityName.trim()) return
+    const face = detectedFaces[selectedFaceIdx]
+    const facePreviewUrl = `data:image/png;base64,${face.image_base64}`
+
+    setIsRegistering(true)
+    const formData = new FormData()
+    formData.append('image', imageFile)
+    formData.append('name', entityName.trim())
+
+    fetch(`${API_BASE}/api/entities/from-image`, { method: 'POST', body: formData })
+      .then(res => res.ok ? res.json() : Promise.reject())
+      .then(data => {
+        const preview = data.face_snap_base64
+          ? `data:image/png;base64,${data.face_snap_base64}`
+          : facePreviewUrl
+        const entityId = data.entity?.id
+        const name = entityName.trim()
+        onEntityAdded?.({ id: entityId, file: imageFile, previewUrl: preview, name, faceBase64: face.image_base64 })
+        onClose()
+      })
+      .catch(() => {
+        onEntityAdded?.({ file: imageFile, previewUrl: facePreviewUrl, name: entityName.trim(), faceBase64: face.image_base64 })
+        onClose()
+      })
+      .finally(() => setIsRegistering(false))
+  }
+
   function handleCropConfirm() {
     if (imageFile && imagePreview) {
       onEntityAdded?.({ file: imageFile, crop, previewUrl: imagePreview, name: entityName.trim() || undefined })
@@ -150,20 +278,143 @@ export default function AddEntityModal({ open, onClose, onEntityAdded }: AddEnti
     onClose()
   }
 
-  function handleCropBack() {
-    setStep('choose')
-  }
-
-  function handleChooseBack() {
+  function handleDetectBack() {
     setStep('upload')
     if (imagePreview) URL.revokeObjectURL(imagePreview)
     setImagePreview(null)
     setImageFile(null)
+    setDetectedFaces([])
+    setDetectError(null)
+    setSelectedFaceIdx(null)
+  }
+
+  function handleCropBack() {
+    setStep('detect')
   }
 
   if (!open) return null
 
-  if (step === 'choose' && imagePreview && imageFile) {
+  /* ── Choice: existing vs new ── */
+  if (choice === null) {
+    return (
+      <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+        <div className="absolute inset-0 bg-brand-charcoal/40 backdrop-blur-sm" onClick={onClose} aria-hidden />
+        <div className="relative w-full max-w-md rounded-xl border border-gray-200 bg-surface shadow-xl" role="dialog" aria-modal="true" aria-labelledby="add-entity-choice-title">
+          <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4">
+            <h2 id="add-entity-choice-title" className="text-lg font-semibold text-gray-900">Add Entity</h2>
+            <button type="button" onClick={onClose} className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors" aria-label="Close">
+              <IconClose />
+            </button>
+          </div>
+          <div className="p-5 space-y-3">
+            <button
+              type="button"
+              onClick={() => setChoice('existing')}
+              className="w-full rounded-xl border-2 border-gray-200 bg-gray-50 py-6 px-5 flex items-center gap-4 text-left hover:border-accent hover:bg-accent/5 transition-colors"
+            >
+              <div className="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center shrink-0">
+                <svg className="w-6 h-6 text-gray-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                </svg>
+              </div>
+              <div>
+                <p className="font-medium text-gray-900">Choose from existing entities</p>
+                <p className="text-sm text-gray-500">Select an entity already in the index</p>
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setChoice('new')}
+              className="w-full rounded-xl border-2 border-gray-200 bg-gray-50 py-6 px-5 flex items-center gap-4 text-left hover:border-accent hover:bg-accent/5 transition-colors"
+            >
+              <div className="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center shrink-0">
+                <IconUpload className="w-6 h-6 text-gray-600" />
+              </div>
+              <div>
+                <p className="font-medium text-gray-900">Add new entity from image</p>
+                <p className="text-sm text-gray-500">Upload a photo; face will be detected and registered</p>
+              </div>
+            </button>
+          </div>
+          <div className="px-5 pb-5 flex justify-end">
+            <button type="button" onClick={onClose} className="h-8 px-3 rounded-[9.6px] text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 transition-colors">
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  /* ── Existing entities list ── */
+  if (choice === 'existing') {
+    return (
+      <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+        <div className="absolute inset-0 bg-brand-charcoal/40 backdrop-blur-sm" onClick={onClose} aria-hidden />
+        <div className="relative w-full max-w-md rounded-xl border border-gray-200 bg-surface shadow-xl max-h-[85vh] flex flex-col" role="dialog" aria-modal="true" aria-labelledby="add-entity-existing-title">
+          <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4 shrink-0">
+            <h2 id="add-entity-existing-title" className="text-lg font-semibold text-gray-900">Choose entity</h2>
+            <button type="button" onClick={onClose} className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors" aria-label="Close">
+              <IconClose />
+            </button>
+          </div>
+          <div className="p-5 overflow-y-auto flex-1 min-h-0">
+            <div className="mb-4">
+              <BackButton onClick={() => setChoice(null)} />
+            </div>
+            {existingLoading && (
+              <div className="flex flex-col items-center py-12 gap-3">
+                <div className="w-8 h-8 border-2 border-gray-300 border-t-gray-800 rounded-full animate-spin" />
+                <p className="text-sm text-gray-500">Loading entities...</p>
+              </div>
+            )}
+            {!existingLoading && existingError && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                <p className="text-sm text-amber-800 mb-2">{existingError}</p>
+                <button type="button" onClick={fetchExistingEntities} className="text-sm font-medium text-amber-700 hover:text-amber-900 underline underline-offset-2">
+                  Retry
+                </button>
+              </div>
+            )}
+            {!existingLoading && !existingError && existingEntities.length === 0 && (
+              <p className="text-center text-gray-500 py-8">No entities in the index yet. Add one from an image.</p>
+            )}
+            {!existingLoading && !existingError && existingEntities.length > 0 && (
+              <ul className="space-y-2">
+                {existingEntities.map((ent) => (
+                  <li key={ent.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onEntityAdded?.({ id: ent.id, name: ent.name, previewUrl: ent.previewUrl })
+                        onClose()
+                      }}
+                      className="w-full rounded-xl border border-gray-200 bg-gray-50 py-3 px-4 flex items-center gap-3 text-left hover:border-accent hover:bg-accent/5 transition-colors"
+                    >
+                      {ent.previewUrl ? (
+                        <img src={ent.previewUrl} alt="" className="w-12 h-12 rounded-full object-cover shrink-0" />
+                      ) : (
+                        <div className="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center shrink-0 text-gray-600 font-medium text-sm">
+                          {ent.name.slice(0, 2).toUpperCase()}
+                        </div>
+                      )}
+                      <span className="font-medium text-gray-900 truncate">{ent.name}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  /* ── Detect step: auto face detection with API ── */
+  if (step === 'detect' && imagePreview && imageFile) {
     return (
       <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
         <div
@@ -175,11 +426,11 @@ export default function AddEntityModal({ open, onClose, onEntityAdded }: AddEnti
           className="relative w-full max-w-md rounded-xl border border-gray-200 bg-surface shadow-xl"
           role="dialog"
           aria-modal="true"
-          aria-labelledby="choose-entity-modal-title"
+          aria-labelledby="detect-entity-modal-title"
         >
           <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4">
-            <h2 id="choose-entity-modal-title" className="text-lg font-semibold text-gray-900">
-              How would you like to select the face?
+            <h2 id="detect-entity-modal-title" className="text-lg font-semibold text-gray-900">
+              Add Entity
             </h2>
             <button
               type="button"
@@ -192,6 +443,7 @@ export default function AddEntityModal({ open, onClose, onEntityAdded }: AddEnti
           </div>
 
           <div className="p-5">
+            {/* Image preview */}
             <div className="flex items-center gap-4 mb-4 p-3 rounded-xl bg-gray-50 border border-gray-200">
               <img
                 src={imagePreview}
@@ -201,6 +453,7 @@ export default function AddEntityModal({ open, onClose, onEntityAdded }: AddEnti
               <p className="text-sm text-gray-600 truncate flex-1 min-w-0">{imageFile.name}</p>
             </div>
 
+            {/* Name input */}
             <div className="mb-4">
               <label htmlFor="add-entity-name" className="block text-sm font-medium text-gray-700 mb-1.5">
                 Person name
@@ -215,45 +468,98 @@ export default function AddEntityModal({ open, onClose, onEntityAdded }: AddEnti
               />
             </div>
 
-            <p className="text-sm text-gray-600 mb-4">
-              Use automated detection to find the face automatically, or manually select the face region.
-            </p>
+            {/* Detection results */}
+            <div className="mb-4">
+              {isDetecting && (
+                <div className="flex flex-col items-center py-8 gap-3">
+                  <div className="w-8 h-8 border-2 border-gray-300 border-t-gray-800 rounded-full animate-spin" />
+                  <p className="text-sm text-gray-500">Detecting faces...</p>
+                </div>
+              )}
 
-            <div className="space-y-2">
-              <button
-                type="button"
-                disabled
-                className="w-full flex items-center justify-between px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 text-gray-400 cursor-not-allowed text-left"
-                aria-disabled="true"
-              >
-                <span className="text-sm font-medium">Automated face detection</span>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-500">Coming soon</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setStep('crop')}
-                className="w-full flex items-center justify-between px-4 py-3 rounded-xl border border-gray-200 bg-white hover:border-accent hover:bg-accent/5 text-gray-900 transition-colors text-left"
-              >
-                <span className="text-sm font-medium">Manual selection</span>
-                <span className="text-xs text-gray-500">Drag and resize a circle over the face</span>
-              </button>
+              {!isDetecting && detectError && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                  <p className="text-sm text-amber-800 mb-2">{detectError}</p>
+                  <button
+                    type="button"
+                    onClick={() => setStep('crop')}
+                    className="text-sm font-medium text-amber-700 hover:text-amber-900 underline underline-offset-2"
+                  >
+                    Use manual selection instead
+                  </button>
+                </div>
+              )}
+
+              {!isDetecting && !detectError && detectedFaces.length > 0 && (
+                <div>
+                  <p className="text-sm text-gray-600 mb-3">
+                    {detectedFaces.length === 1 ? '1 face detected' : `${detectedFaces.length} faces detected`} — select the one to use:
+                  </p>
+                  <div className="flex flex-wrap gap-3">
+                    {detectedFaces.map((face, idx) => (
+                      <button
+                        key={face.index}
+                        type="button"
+                        onClick={() => setSelectedFaceIdx(idx)}
+                        className={`relative w-20 h-20 rounded-full overflow-hidden border-[2.5px] transition-all duration-150 ${
+                          selectedFaceIdx === idx
+                            ? 'border-accent ring-2 ring-accent/40 scale-105 shadow-[0_0_14px_rgba(0,220,130,0.45)]'
+                            : 'border-gray-200 hover:border-gray-400'
+                        }`}
+                      >
+                        <img
+                          src={`data:image/png;base64,${face.image_base64}`}
+                          alt={`Detected face ${idx + 1}`}
+                          className="w-full h-full object-cover"
+                        />
+                        <span className="absolute bottom-0 left-1/2 -translate-x-1/2 text-[10px] font-medium text-white bg-black/60 px-1.5 py-px rounded-t">
+                          {Math.round(face.confidence * 100)}%
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
-            <div className="mt-5 flex justify-between">
-              <button
-                type="button"
-                onClick={handleChooseBack}
-                className="h-8 px-3 rounded-[9.6px] text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 transition-colors"
-              >
-                Back
-              </button>
-              <button
-                type="button"
-                onClick={onClose}
-                className="h-8 px-3 rounded-[9.6px] text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 transition-colors"
-              >
-                Cancel
-              </button>
+            {/* Manual fallback link */}
+            {!isDetecting && !detectError && detectedFaces.length > 0 && (
+              <div className="mb-4 text-center">
+                <button
+                  type="button"
+                  onClick={() => setStep('crop')}
+                  className="text-sm text-gray-500 hover:text-gray-700 underline underline-offset-2 transition-colors"
+                >
+                  Switch to manual selection
+                </button>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex justify-between">
+              <BackButton onClick={handleDetectBack} />
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="h-8 px-3 rounded-[9.6px] text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 transition-colors"
+                >
+                  Cancel
+                </button>
+                {detectedFaces.length > 0 && selectedFaceIdx !== null && (
+                  <button
+                    type="button"
+                    onClick={handleAutoConfirm}
+                    disabled={!entityName.trim() || isRegistering}
+                    className="h-8 px-3 rounded-[9.6px] text-sm font-medium bg-brand-charcoal text-brand-white hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+                  >
+                    {isRegistering && (
+                      <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    )}
+                    {isRegistering ? 'Adding...' : 'Confirm'}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -261,6 +567,7 @@ export default function AddEntityModal({ open, onClose, onEntityAdded }: AddEnti
     )
   }
 
+  /* ── Manual crop step ── */
   if (step === 'crop' && imagePreview) {
     return (
       <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
@@ -277,7 +584,7 @@ export default function AddEntityModal({ open, onClose, onEntityAdded }: AddEnti
         >
           <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4">
             <h2 id="crop-entity-modal-title" className="text-lg font-semibold text-gray-900">
-              Select face region
+              Manual face selection
             </h2>
             <button
               type="button"
@@ -360,13 +667,7 @@ export default function AddEntityModal({ open, onClose, onEntityAdded }: AddEnti
             </div>
 
             <div className="mt-5 flex justify-between">
-              <button
-                type="button"
-                onClick={handleCropBack}
-                className="h-8 px-3 rounded-[9.6px] text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 transition-colors"
-              >
-                Back
-              </button>
+              <BackButton onClick={handleCropBack} />
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -390,6 +691,7 @@ export default function AddEntityModal({ open, onClose, onEntityAdded }: AddEnti
     )
   }
 
+  /* ── Upload step (Add new from image) ── */
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
       <div
@@ -405,7 +707,7 @@ export default function AddEntityModal({ open, onClose, onEntityAdded }: AddEnti
       >
         <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4">
           <h2 id="add-entity-modal-title" className="text-lg font-semibold text-gray-900">
-            Add Entity
+            Add new entity from image
           </h2>
           <button
             type="button"
@@ -418,6 +720,9 @@ export default function AddEntityModal({ open, onClose, onEntityAdded }: AddEnti
         </div>
 
         <div className="p-5">
+          <div className="mb-4">
+            <BackButton onClick={() => setChoice(null)} />
+          </div>
           <input
             ref={inputRef}
             type="file"
@@ -437,7 +742,7 @@ export default function AddEntityModal({ open, onClose, onEntityAdded }: AddEnti
               <IconUpload className="w-6 h-6 text-gray-500" />
             </div>
             <span className="text-sm font-medium">Click to select or drag and drop</span>
-            <span className="text-xs">Image with a face (JPG, PNG, WebP). You’ll Choose automated or manual face selection next.</span>
+            <span className="text-xs">Image with a face (JPG, PNG, WebP). The face will be detected automatically.</span>
           </button>
 
           <div className="mt-5 flex justify-end">

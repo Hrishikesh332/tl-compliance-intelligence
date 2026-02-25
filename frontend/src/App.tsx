@@ -5,6 +5,7 @@ import VideoAnalysis from './pages/VideoAnalysis'
 import EntitiesPage from './pages/EntitiesPage'
 import Chatbot from './pages/Chatbot'
 import UploadVideosModal from './components/UploadVideosModal'
+import { VideoCacheProvider } from './contexts/VideoCache'
 /* Strand: logo and icons from design system (strand/assets, strand/icons) */
 import logoMarkUrl from '../strand/assets/logo-mark.svg?url'
 import uploadAssetIconUrl from '../strand/icons/arrow-box-up.svg?url'
@@ -73,7 +74,7 @@ function Shell() {
             <div className="flex items-center gap-2 mr-2 md:mr-6 min-w-0">
               <Link
                 to="/"
-                className="font-brand text-text-primary hover:opacity-80 transition-opacity cursor-pointer shrink-0"
+                className="font-brand text-text-primary hover:opacity-80 transition-opacity cursor-pointer shrink-0 text-left bg-transparent border-0 p-0 no-underline block"
                 aria-label="Go to Dashboard"
               >
                 <h1 className="text-base md:text-h5 font-medium truncate">Compliance Intelligence</h1>
@@ -149,8 +150,8 @@ function Shell() {
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        <main className="flex-1 overflow-auto min-w-0">
-          <Routes>
+        <main className="flex-1 overflow-auto min-w-0" key={location.pathname}>
+          <Routes location={location}>
             <Route
               path="/"
               element={
@@ -161,7 +162,7 @@ function Shell() {
             />
             <Route path="/entities" element={<EntitiesPage />} />
             <Route path="/chat" element={<Chatbot />} />
-            <Route path="/:videoId" element={<VideoAnalysis />} />
+            <Route path="/video/:videoId" element={<VideoAnalysis />} />
           </Routes>
         </main>
       </div>
@@ -173,7 +174,9 @@ function Shell() {
 function App() {
   return (
     <BrowserRouter>
-      <Shell />
+      <VideoCacheProvider>
+        <Shell />
+      </VideoCacheProvider>
     </BrowserRouter>
   )
 }

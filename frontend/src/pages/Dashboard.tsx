@@ -2,11 +2,20 @@ import { useState, useMemo, useRef, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import AddImageModal from '../components/AddImageModal'
 import AddEntityModal, { type EntitySelection } from '../components/AddEntityModal'
+import { useVideoCache, type CachedVideo } from '../contexts/VideoCache'
 import searchIconUrl from '../../strand/icons/search.svg?url'
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
 type SearchAttachment = {
   id: string
   type: 'image' | 'entity'
+  name: string
+  previewUrl: string
+}
+
+type EntityOption = {
+  id: string
   name: string
   previewUrl: string
 }
@@ -238,9 +247,16 @@ function TagPills({ tags }: { tags: string[] }) {
 /*  Dummy data                                                         */
 /* ------------------------------------------------------------------ */
 
-const CATEGORIES = ['All', 'BodyCam', 'DashCam', 'CCTV', 'Insurance Claim'] as const
+const CATEGORIES = ['All', 'Uploaded', 'BodyCam', 'DashCam', 'CCTV', 'Insurance Claim'] as const
 
 type TableEntity = { id: string; name: string; imageUrl?: string; initials: string }
+
+type ClipMatch = {
+  start: number
+  end: number
+  score: number
+  type: string
+}
 
 type VideoItem = {
   id: string
@@ -251,17 +267,29 @@ type VideoItem = {
   category: string
   tags?: string[]
   entities?: TableEntity[]
+  streamUrl?: string
+  clips?: ClipMatch[]
+  searchScore?: number
+}
+
+function relevanceLabel(clips: ClipMatch[] | undefined): { label: string; color: string } {
+  if (!clips || clips.length === 0) return { label: '', color: '' }
+  const best = Math.max(...clips.map((c) => c.score))
+  if (best >= 0.10) return { label: 'Highest', color: 'bg-emerald-100 text-emerald-800 border-emerald-300' }
+  if (best >= 0.08) return { label: 'High', color: 'bg-green-100 text-green-800 border-green-300' }
+  if (best >= 0.06) return { label: 'Medium', color: 'bg-yellow-100 text-yellow-800 border-yellow-300' }
+  return { label: 'Low', color: 'bg-red-50 text-red-700 border-red-200' }
+}
+
+function clipScoreColor(score: number): string {
+  if (score >= 0.10) return 'bg-emerald-50 text-emerald-700 border-emerald-200'
+  if (score >= 0.08) return 'bg-green-50 text-green-700 border-green-200'
+  if (score >= 0.06) return 'bg-yellow-50 text-yellow-700 border-yellow-200'
+  return 'bg-red-50 text-red-600 border-red-200'
 }
 
 const SAMPLE_VIDEOS: VideoItem[] = [
   { id: 'abc123', title: 'Officer_patrol_downtown.mp4', uploadDate: '03-15-2024', duration: '00:02:19', totalMinutes: 2, category: 'BodyCam', tags: ['BodyCam', 'Patrol', 'Unit 7'], entities: [{ id: 'e1', name: 'Karen Nelson', imageUrl: 'https://picsum.photos/128/128?random=1', initials: 'KN' }, { id: 'e2', name: 'Esther Howard', imageUrl: 'https://picsum.photos/128/128?random=2', initials: 'EH' }, { id: 'e3', name: 'Robert Fox', initials: 'RF' }] },
-  { id: 'def456', title: 'Highway_pursuit_I95.mp4', uploadDate: '03-12-2024', duration: '00:01:52', totalMinutes: 1, category: 'DashCam', tags: ['DashCam', 'Highway'], entities: [{ id: 'e2', name: 'Esther Howard', imageUrl: 'https://picsum.photos/128/128?random=2', initials: 'EH' }] },
-  { id: 'ghi789', title: 'Warehouse_east_entrance.mp4', uploadDate: '03-08-2024', duration: '00:17:06', totalMinutes: 17, category: 'CCTV', tags: ['CCTV', 'Warehouse', 'East Wing'], entities: [{ id: 'e1', name: 'Karen Nelson', imageUrl: 'https://picsum.photos/128/128?random=1', initials: 'KN' }, { id: 'e4', name: 'Jane Cooper', imageUrl: 'https://picsum.photos/128/128?random=4', initials: 'JC' }] },
-  { id: 'jkl012', title: 'Vehicle_collision_claim_4821.mp4', uploadDate: '03-05-2024', duration: '00:04:11', totalMinutes: 4, category: 'Insurance Claim', tags: ['Insurance Claim', 'Collision'], entities: [] },
-  { id: 'mno345', title: 'Night_shift_lobby_cam.mp4', uploadDate: '03-01-2024', duration: '00:09:07', totalMinutes: 9, category: 'CCTV', tags: ['CCTV', 'Lobby', 'Night Shift'], entities: [{ id: 'e5', name: 'Jacob Jones', initials: 'JJ' }, { id: 'e6', name: 'Michelle Henderson', initials: 'MH' }, { id: 'e7', name: 'Daniel Smith', initials: 'DS' }] },
-  { id: 'pqr678', title: 'Kitchen_incident_report.mp4', uploadDate: '02-28-2024', duration: '00:06:41', totalMinutes: 6, category: 'Insurance Claim', tags: ['Insurance Claim', 'Incident', 'Kitchen'], entities: [{ id: 'e1', name: 'Karen Nelson', imageUrl: 'https://picsum.photos/128/128?random=1', initials: 'KN' }] },
-  { id: 'stu901', title: 'Traffic_stop_dash_032.mp4', uploadDate: '02-25-2024', duration: '00:03:55', totalMinutes: 3, category: 'DashCam', tags: ['DashCam', 'Traffic Stop'], entities: [{ id: 'e3', name: 'Robert Fox', imageUrl: 'https://picsum.photos/128/128?random=3', initials: 'RF' }, { id: 'e8', name: 'Sarah Williams', initials: 'SW' }] },
-  { id: 'vwx234', title: 'Foot_chase_bodycam_unit7.mp4', uploadDate: '02-20-2024', duration: '00:08:22', totalMinutes: 8, category: 'BodyCam', tags: ['BodyCam', 'Foot Chase', 'Unit 7'], entities: [{ id: 'e6', name: 'Michelle Henderson', imageUrl: 'https://picsum.photos/128/128?random=6', initials: 'MH' }] },
 ]
 
 type FolderItem = {
@@ -271,18 +299,23 @@ type FolderItem = {
 }
 
 const SAMPLE_FOLDERS: FolderItem[] = [
-  { name: 'BodyCam — Unit 7 Patrols', category: 'BodyCam', videoIds: ['abc123', 'vwx234'] },
-  { name: 'DashCam — Highway Division', category: 'DashCam', videoIds: ['def456', 'stu901'] },
-  { name: 'CCTV — Building East Wing', category: 'CCTV', videoIds: ['ghi789', 'mno345'] },
-  { name: 'Insurance Claims — Q1 2026', category: 'Insurance Claim', videoIds: ['jkl012', 'pqr678'] },
+  { name: 'BodyCam — Unit 7 Patrols', category: 'BodyCam', videoIds: ['abc123'] },
 ]
 
 const TOTAL_CAPACITY = 100
 const TOTAL_HOURS = 10
 
-function formatTotalDuration(videos: VideoItem[]) {
-  const total = videos.reduce((sum, v) => sum + v.totalMinutes, 0)
-  return `${total} min`
+function formatTotalDuration(videos: VideoItem[], videoDurations?: Record<string, number>) {
+  const totalSeconds = videos.reduce((sum, v) => {
+    const sec = videoDurations?.[v.id]
+    if (sec != null && Number.isFinite(sec)) return sum + sec
+    return sum + v.totalMinutes * 60
+  }, 0)
+  if (totalSeconds <= 0) return '0 min'
+  const h = Math.floor(totalSeconds / 3600)
+  const m = Math.floor((totalSeconds % 3600) / 60)
+  if (h > 0) return `${h} h ${m} min`
+  return `${m} min`
 }
 
 /** Format as mm:ss for thumbnail badge (hours omitted). */
@@ -305,6 +338,16 @@ function formatDurationShort(duration: string): string {
     return `${m}:${s.toString().padStart(2, '0')}`
   }
   return duration
+}
+
+/** Format seconds to badge (mm:ss) or (h:mm:ss). */
+function formatSecondsToTimestamp(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '—'
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = Math.floor(seconds % 60)
+  if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+  return `${m}:${s.toString().padStart(2, '0')}`
 }
 
 /* ------------------------------------------------------------------ */
@@ -446,6 +489,54 @@ export default function Dashboard() {
   const [activeCategory, setActiveCategory] = useState<string>('All')
   const [viewMode, setViewMode] = useState<'videos' | 'folders' | 'tabular'>('videos')
   const [openFolderIdx, setOpenFolderIdx] = useState<number | null>(null)
+  const { videos: cachedVideos } = useVideoCache()
+  const apiVideos = useMemo<VideoItem[]>(() => {
+    return cachedVideos.map((v: CachedVideo) => {
+      const meta = v.metadata || {}
+      const uploaded = meta.uploaded_at || ''
+      let uploadDate = ''
+      if (uploaded) {
+        try {
+          const d = new Date(uploaded)
+          uploadDate = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}-${d.getFullYear()}`
+        } catch { uploadDate = uploaded }
+      }
+      return {
+        id: v.id,
+        title: meta.filename || v.id,
+        uploadDate,
+        duration: '—',
+        totalMinutes: 0,
+        category: 'Uploaded',
+        tags: [
+          ...(Array.isArray(meta.tags) ? meta.tags : []),
+          meta.status === 'ready' ? 'Indexed' : meta.status === 'indexing' ? 'Indexing' : 'Uploaded',
+        ],
+        entities: [],
+        streamUrl: v.stream_url || undefined,
+      }
+    })
+  }, [cachedVideos])
+
+  const [videoDurations, setVideoDurations] = useState<Record<string, number>>({})
+  const [videoLoadFailed, setVideoLoadFailed] = useState<Record<string, boolean>>({})
+  const [videoLoaded, setVideoLoaded] = useState<Record<string, boolean>>({})
+  const videoLoadedRef = useRef<Record<string, boolean>>({})
+  videoLoadedRef.current = videoLoaded
+  const SEARCH_PLACEHOLDERS = [
+    'Search actions, objects, sounds and logos',
+    "Search with entities (@ + name)",
+    'Search with image and text across videos',
+  ]
+  const [placeholderIdx, setPlaceholderIdx] = useState(0)
+  useEffect(() => {
+    if (searchQuery || searchAttachments.length) return
+    const timer = setInterval(() => {
+      setPlaceholderIdx((i) => (i + 1) % SEARCH_PLACEHOLDERS.length)
+    }, 6000)
+    return () => clearInterval(timer)
+  }, [searchQuery, searchAttachments.length])
+
   const [searchOptions, setSearchOptions] = useState<SearchOptions>({
     visual: true,
     audio: true,
@@ -453,44 +544,216 @@ export default function Dashboard() {
     lexical: true,
     semantic: true,
   })
+  const [searchResults, setSearchResults] = useState<{ query: string; results: VideoItem[] } | null>(null)
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [entitiesList, setEntitiesList] = useState<EntityOption[]>([])
+  const entityDropdownRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`${API_BASE}/api/entities`)
+      .then((res) => res.json())
+      .then((data: { entities?: Array<{ id: string; metadata?: { name?: string; face_snap_base64?: string } }> }) => {
+        if (cancelled) return
+        const list: EntityOption[] = (data.entities || []).map((e) => {
+          const name = e.metadata?.name || e.id
+          const b64 = e.metadata?.face_snap_base64
+          const previewUrl = b64 ? `data:image/png;base64,${b64}` : ''
+          return { id: e.id, name, previewUrl }
+        })
+        setEntitiesList(list)
+      })
+      .catch(() => { if (!cancelled) setEntitiesList([]) })
+    return () => { cancelled = true }
+  }, [])
+
+  const { entityMentionQuery, entityDropdownVisible, filteredEntities, queryBeforeMention } = useMemo(() => {
+    const lastAt = searchQuery.lastIndexOf('@')
+    if (lastAt < 0) {
+      return {
+        entityMentionQuery: '',
+        entityDropdownVisible: false,
+        filteredEntities: [] as EntityOption[],
+        queryBeforeMention: searchQuery,
+      }
+    }
+    const afterAt = searchQuery.slice(lastAt + 1)
+    const hasSpace = afterAt.includes(' ')
+    const mentionQuery = hasSpace ? afterAt.split(/\s/)[0] || '' : afterAt
+    const filter = mentionQuery.toLowerCase()
+    const filtered = filter
+      ? entitiesList.filter((e) => e.name.toLowerCase().includes(filter))
+      : entitiesList
+    return {
+      entityMentionQuery: mentionQuery,
+      entityDropdownVisible: true,
+      filteredEntities: filtered.slice(0, 8),
+      queryBeforeMention: searchQuery.slice(0, lastAt),
+    }
+  }, [searchQuery, entitiesList])
+
+  useEffect(() => {
+    if (!entityDropdownVisible) return
+    function handleClickOutside(e: MouseEvent) {
+      if (entityDropdownRef.current && !entityDropdownRef.current.contains(e.target as Node)) {
+        setSearchQuery((q) => {
+          const lastAt = q.lastIndexOf('@')
+          if (lastAt < 0) return q
+          return q.slice(0, lastAt)
+        })
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [entityDropdownVisible])
+
+  const allVideos = useMemo(() => [...SAMPLE_VIDEOS, ...apiVideos], [apiVideos])
 
   const filteredVideos = useMemo(() => {
-    let list = SAMPLE_VIDEOS
+    if (searchResults) return searchResults.results
+    let list = allVideos
     if (activeCategory !== 'All') {
       list = list.filter((v) => v.category === activeCategory)
-    }
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase()
-      list = list.filter(
-        (v) =>
-          v.title.toLowerCase().includes(q) ||
-          v.id.toLowerCase().includes(q)
-      )
     }
     if (sortBy === 'name') {
       list = [...list].sort((a, b) => a.title.localeCompare(b.title))
     }
     return list
-  }, [searchQuery, sortBy, activeCategory])
+  }, [allVideos, sortBy, activeCategory, searchResults])
+
+  const dynamicFolders = useMemo(() => {
+    const tagMap: Record<string, string[]> = {}
+    for (const v of apiVideos) {
+      const tags = v.tags || []
+      for (const t of tags) {
+        const key = t.toLowerCase()
+        if (['indexed', 'indexing', 'uploaded'].includes(key)) continue
+        if (!tagMap[key]) tagMap[key] = []
+        if (!tagMap[key].includes(v.id)) tagMap[key].push(v.id)
+      }
+    }
+    return Object.entries(tagMap).map(([tag, ids]) => ({
+      name: tag.charAt(0).toUpperCase() + tag.slice(1),
+      category: tag.charAt(0).toUpperCase() + tag.slice(1),
+      videoIds: ids,
+    }))
+  }, [apiVideos])
+
+  const allFolders = useMemo(() => [...SAMPLE_FOLDERS, ...dynamicFolders], [dynamicFolders])
 
   const filteredFolders = useMemo(() => {
-    let list = SAMPLE_FOLDERS
+    let list = allFolders
     if (activeCategory !== 'All') {
-      list = list.filter((f) => f.category === activeCategory)
-    }
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase()
-      list = list.filter((f) => f.name.toLowerCase().includes(q))
+      list = list.filter((f) => f.category.toLowerCase() === activeCategory.toLowerCase())
     }
     return list
-  }, [searchQuery, activeCategory])
+  }, [allFolders, activeCategory])
 
-  function handleSearch() {
+  async function handleSearch() {
     const query = searchQuery.trim()
-    if (!query) return
-    // TODO: Replace with backend API call when ready, e.g.:
-    // await searchVideos({ query, attachments: searchAttachments, options: searchOptions })
-    // For now, results are filtered client-side via filteredVideos / filteredFolders above.
+    const entityIds = searchAttachments.filter((a) => a.type === 'entity').map((a) => a.id)
+    const hasQuery = query.length > 0
+    const hasEntities = entityIds.length > 0
+    if (!hasQuery && !hasEntities) return
+    setSearchError(null)
+    setSearchLoading(true)
+    try {
+      const body: Record<string, unknown> = {
+        top_k: hasEntities ? 12 : 24,
+        clips_per_video: hasEntities ? 3 : 5,
+      }
+      if (hasQuery) body.query = query
+      if (hasEntities) body.entity_ids = entityIds
+      const res = await fetch(`${API_BASE}/api/search/videos`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setSearchError(data.error || 'Search failed')
+        setSearchResults(null)
+        return
+      }
+      const results: VideoItem[] = (data.results || []).map((r: any) => {
+        const meta = r.metadata || {}
+        let uploadDate = ''
+        try {
+          const u = meta.uploaded_at || ''
+          if (u) {
+            const d = new Date(u)
+            uploadDate = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}-${d.getFullYear()}`
+          }
+        } catch { uploadDate = meta.uploaded_at || '' }
+        return {
+          id: r.id,
+          title: meta.filename || r.id,
+          uploadDate,
+          duration: '—',
+          totalMinutes: 0,
+          category: 'Uploaded',
+          tags: [
+            ...(Array.isArray(meta.tags) ? meta.tags : []),
+            meta.status === 'ready' ? 'Indexed' : meta.status === 'indexing' ? 'Indexing' : 'Uploaded',
+          ],
+          entities: [],
+          streamUrl: r.stream_url || undefined,
+          clips: Array.isArray(r.clips) ? r.clips : [],
+          searchScore: r.score,
+        }
+      })
+      const displayQuery = data.query ?? (hasQuery ? query : (hasEntities ? `Entity: ${searchAttachments.filter((a) => a.type === 'entity').map((a) => a.name).join(', ')}` : query))
+      setSearchResults({ query: displayQuery, results })
+      try {
+        sessionStorage.setItem('vc_last_search', JSON.stringify({ query: displayQuery, results }))
+      } catch {
+        // ignore
+      }
+    } catch (e) {
+      setSearchError('Search request failed')
+      setSearchResults(null)
+    } finally {
+      setSearchLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('vc_last_search')
+      if (raw) {
+        const parsed = JSON.parse(raw) as { query: string; results: VideoItem[] }
+        if (parsed?.query != null && Array.isArray(parsed.results)) {
+          setSearchQuery(parsed.query)
+          setSearchResults({ query: parsed.query, results: parsed.results })
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  function clearSearch() {
+    setSearchResults(null)
+    setSearchError(null)
+    try {
+      sessionStorage.removeItem('vc_last_search')
+    } catch {
+      // ignore
+    }
+  }
+
+  function selectEntity(entity: EntityOption) {
+    setSearchAttachments((prev) => {
+      if (prev.some((a) => a.type === 'entity' && a.id === entity.id)) return prev
+      return [...prev, { id: entity.id, type: 'entity' as const, name: entity.name, previewUrl: entity.previewUrl || '' }]
+    })
+    setSearchQuery((q) => {
+      const lastAt = q.lastIndexOf('@')
+      if (lastAt < 0) return q
+      const before = q.slice(0, lastAt).trimEnd()
+      return before ? `${before} ` : ''
+    })
   }
 
   return (
@@ -529,14 +792,74 @@ export default function Dashboard() {
                   </button>
                 </span>
               ))}
-              <input
-                type="text"
-                placeholder={searchAttachments.length ? 'Add search terms...' : "Search entities with '@+name'"}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="flex-1 min-w-[100px] sm:min-w-[120px] text-base sm:text-lg text-text-primary placeholder:text-text-tertiary bg-transparent focus:outline-none"
-                aria-label="Search videos"
-              />
+              <div ref={entityDropdownRef} className="relative flex-1 min-w-[100px] sm:min-w-[120px] overflow-visible">
+                {!searchQuery && !searchAttachments.length && (
+                  <div className="pointer-events-none absolute inset-0 flex items-center overflow-hidden">
+                    <div
+                      key={placeholderIdx}
+                      className="text-base sm:text-lg text-text-tertiary whitespace-nowrap animate-placeholder-slide"
+                    >
+                      {SEARCH_PLACEHOLDERS[placeholderIdx]}
+                    </div>
+                  </div>
+                )}
+                <input
+                  type="text"
+                  placeholder={searchAttachments.length ? 'Add search terms...' : ''}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (entityDropdownVisible) {
+                      if (e.key === 'Escape') {
+                        setSearchQuery((q) => (q.lastIndexOf('@') >= 0 ? q.slice(0, q.lastIndexOf('@')) : q))
+                        e.preventDefault()
+                        return
+                      }
+                      if (e.key === 'Enter' && filteredEntities.length > 0) {
+                        selectEntity(filteredEntities[0])
+                        e.preventDefault()
+                        return
+                      }
+                    }
+                    if (e.key === 'Enter') { e.preventDefault(); handleSearch(); }
+                  }}
+                  className="relative w-full text-base sm:text-lg text-text-primary placeholder:text-text-tertiary bg-transparent focus:outline-none z-[1]"
+                  aria-label="Search videos"
+                  aria-autocomplete="list"
+                  aria-expanded={entityDropdownVisible}
+                  aria-controls="entity-mention-list"
+                />
+                {entityDropdownVisible && (
+                  <ul
+                    id="entity-mention-list"
+                    role="listbox"
+                    className="absolute left-0 right-0 top-full mt-1 z-[100] max-h-56 overflow-auto rounded-lg border border-border bg-surface shadow-lg py-1 min-w-[200px]"
+                  >
+                    {filteredEntities.length === 0 ? (
+                      <li className="px-3 py-2 text-sm text-text-tertiary">No matching entities</li>
+                    ) : (
+                      filteredEntities.map((entity) => (
+                        <li key={entity.id} role="option">
+                          <button
+                            type="button"
+                            onClick={() => selectEntity(entity)}
+                            className="w-full flex items-center gap-3 px-3 py-2 text-left text-sm text-text-primary hover:bg-card transition-colors"
+                          >
+                            {entity.previewUrl ? (
+                              <img src={entity.previewUrl} alt="" className="w-8 h-8 rounded-full object-cover shrink-0" />
+                            ) : (
+                              <span className="w-8 h-8 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center text-xs font-medium shrink-0">
+                                {entity.name.slice(0, 2).toUpperCase()}
+                              </span>
+                            )}
+                            <span className="font-medium truncate">{entity.name}</span>
+                          </button>
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                )}
+              </div>
             </div>
           </div>
           <div className="px-3 sm:px-4 pb-4 flex flex-wrap items-center justify-between gap-2 w-full">
@@ -558,39 +881,69 @@ export default function Dashboard() {
                 <span className="hidden sm:inline">Add Entity</span>
                 <span className="hidden sm:inline text-[10px] font-medium bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">BETA</span>
               </button>
+              {/* AdvancedParamsDropdown (Filter) commented out per request
               <AdvancedParamsDropdown
                 options={searchOptions}
                 onChange={setSearchOptions}
                 onApply={() => {}}
               />
+              */}
             </div>
             <button
               type="button"
-              disabled={!searchQuery.trim()}
-              onClick={handleSearch}
+              disabled={(!searchQuery.trim() && !searchAttachments.some((a) => a.type === 'entity')) || searchLoading}
+              onClick={() => handleSearch()}
               className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors shrink-0 ${
-                searchQuery.trim()
+                (searchQuery.trim() || searchAttachments.some((a) => a.type === 'entity')) && !searchLoading
                   ? 'bg-brand-charcoal text-brand-white hover:bg-gray-600 cursor-pointer'
                   : 'bg-gray-300 text-gray-500 cursor-not-allowed'
               }`}
               aria-label="Search"
             >
-              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="11" cy="11" r="7" />
-                <line x1="16.65" y1="16.65" x2="21" y2="21" />
-              </svg>
+              {searchLoading ? (
+                <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" aria-hidden />
+              ) : (
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="11" cy="11" r="7" />
+                  <line x1="16.65" y1="16.65" x2="21" y2="21" />
+                </svg>
+              )}
             </button>
           </div>
         </div>
       </div>
 
+      {/* Search result summary + error */}
+      {searchError && (
+        <p className="mb-3 text-sm text-red-600" role="alert">
+          {searchError}
+        </p>
+      )}
+      {searchResults && (
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <span className="text-sm text-text-secondary">
+            {searchResults.results.length === 0
+              ? `No videos found for “${searchResults.query}”.`
+              : `${searchResults.results.length} result${searchResults.results.length !== 1 ? 's' : ''} for “${searchResults.query}”`}
+          </span>
+          <button
+            type="button"
+            onClick={clearSearch}
+            className="text-sm font-medium text-brand-charcoal hover:underline focus:outline-none focus:ring-2 focus:ring-brand-charcoal/30 rounded"
+          >
+            Clear search
+          </button>
+        </div>
+      )}
+
       {/* Category pills */}
-      <div className="flex flex-wrap items-center gap-2 mb-5">
+      <div className="flex flex-wrap items-center gap-2 mb-5" role="group" aria-label="Category filter">
         {CATEGORIES.map((cat) => (
           <button
             key={cat}
             type="button"
             onClick={() => { setActiveCategory(cat); setOpenFolderIdx(null) }}
+            aria-pressed={activeCategory === cat}
             className={`px-4 py-1.5 rounded-full text-sm font-medium border transition-colors ${
               activeCategory === cat
                 ? 'bg-brand-charcoal text-brand-white border-brand-charcoal'
@@ -658,7 +1011,7 @@ export default function Dashboard() {
               <svg className="h-5 w-5 text-gray-500 shrink-0" fill="none" viewBox="0 0 16 16" aria-hidden>
                 <path fill="currentColor" d="M12 1.5a.5.5 0 0 1 0 1h-.5v.838l-.007.193a2.36 2.36 0 0 1-.444 1.238L8.66 7.953l2.637 2.636c.343.343.537.81.537 1.296V13.5H12a.5.5 0 0 1 0 1H4a.5.5 0 0 1 0-1h.167v-1.615l.009-.18c.042-.42.227-.815.528-1.116L7.34 7.953 4.95 4.77a2.36 2.36 0 0 1-.444-1.238L4.5 3.338V2.5H4a.5.5 0 0 1 0-1zm-6.589 9.796a.84.84 0 0 0-.244.59V13.5h5.667v-1.614a.84.84 0 0 0-.244-.59L8 8.706zM5.5 2.5v.838l.005.122c.021.282.114.532.247.709L8 7.166l2.248-2.997c.152-.202.252-.5.252-.831V2.5z" />
               </svg>
-              <p className="text-sm text-gray-600">{formatTotalDuration(filteredVideos)}</p>
+              <p className="text-sm text-gray-600">{formatTotalDuration(filteredVideos, videoDurations)}</p>
             </div>
           </div>
         </div>
@@ -686,25 +1039,74 @@ export default function Dashboard() {
               {filteredVideos.map((v) => (
                 <Link
                   key={v.id}
-                  to={`/${v.id}`}
+                  to={`/video/${v.id}`}
+                  state={v.clips && v.clips.length > 0 ? { searchClips: v.clips, searchScore: v.searchScore, searchQuery: searchResults?.query } : undefined}
+                  onClick={() => {
+                    if (v.clips && v.clips.length > 0 && searchResults?.query) {
+                      try { sessionStorage.setItem(`vc_clips_${v.id}`, JSON.stringify({ clips: v.clips, score: v.searchScore, query: searchResults.query })) } catch {}
+                    }
+                  }}
                   className="group block focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-xl min-w-0"
                 >
                   <div className="relative aspect-video rounded-xl overflow-hidden bg-brand-charcoal">
-                    <div className="absolute inset-0 flex items-center justify-center">
-                        <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                          <IconPlay className="w-5 h-5 text-white ml-0.5" />
+                    {v.streamUrl ? (
+                      <>
+                        <div
+                          className={`absolute inset-0 flex items-center justify-center bg-brand-charcoal z-[1] transition-opacity duration-200 ${videoLoaded[v.id] && !videoLoadFailed[v.id] ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+                          aria-hidden
+                        >
+                          <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center">
+                            <IconPlay className="w-5 h-5 text-white ml-0.5" />
+                          </div>
                         </div>
+                        <video
+                          src={v.streamUrl}
+                          className={`absolute inset-0 w-full h-full object-cover brightness-105 z-0 transition-opacity duration-200 ${videoLoaded[v.id] ? 'opacity-100' : 'opacity-0'}`}
+                          muted
+                          loop
+                          playsInline
+                          preload="metadata"
+                          aria-label={v.title}
+                          data-video-id={v.id}
+                          onLoadedMetadata={(e) => {
+                            const el = e.currentTarget
+                            const id = el.dataset.videoId
+                            if (id && Number.isFinite(el.duration)) {
+                              setVideoDurations((prev) => (prev[id] === el.duration ? prev : { ...prev, [id]: el.duration }))
+                            }
+                          }}
+                          onLoadedData={(e) => {
+                            const id = (e.currentTarget as HTMLVideoElement).dataset.videoId
+                            if (id) setVideoLoaded((prev) => ({ ...prev, [id]: true }))
+                          }}
+                          onError={() => {
+                            setVideoLoadFailed((prev) => ({ ...prev, [v.id]: true }))
+                          }}
+                        />
+                      </>
+                    ) : null}
+                    <div className="absolute inset-0 flex items-center justify-center bg-transparent group-hover:bg-brand-charcoal/40 z-[2] pointer-events-none transition-colors duration-200">
+                      <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                        <IconPlay className="w-5 h-5 text-white ml-0.5" />
+                      </div>
                     </div>
-                    {/* Timestamp badge — no bg, white text + border */}
-                    <span className="absolute left-1/2 -translate-x-1/2 bottom-1.5 px-3 py-1 text-sm font-mono text-white rounded border border-white tabular-nums bg-transparent">
-                      {formatDurationHHMMSS(v.duration)}
+                    {(() => {
+                      const rel = relevanceLabel(v.clips)
+                      return rel.label ? (
+                        <span className={`absolute top-2 left-2 z-[3] inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border ${rel.color}`}>
+                          {rel.label}
+                        </span>
+                      ) : null
+                    })()}
+                    <span className="absolute left-1/2 -translate-x-1/2 bottom-1.5 px-3 py-1 text-sm font-mono font-medium text-white rounded border border-white/90 tabular-nums bg-black/50 [text-shadow:0_0_2px_rgba(0,0,0,0.9)]">
+                      {videoDurations[v.id] != null ? formatSecondsToTimestamp(videoDurations[v.id]) : v.duration !== '—' ? formatDurationHHMMSS(v.duration) : '—'}
                     </span>
                   </div>
                   <p className="mt-2.5 text-sm text-text-secondary truncate group-hover:text-text-primary transition-colors">
                     {v.title}
                   </p>
                   <p className="mt-0.5 text-sm text-text-tertiary tabular-nums">
-                    {formatDurationShort(v.duration)}
+                    {videoDurations[v.id] != null ? formatSecondsToTimestamp(videoDurations[v.id]) : formatDurationShort(v.duration)}
                   </p>
                 </Link>
               ))}
@@ -745,7 +1147,7 @@ export default function Dashboard() {
                     <tr key={v.id} className="hover:bg-card/80 transition-colors">
                       <td className="px-4 py-3">
                         <Link
-                          to={`/${v.id}`}
+                          to={`/video/${v.id}`}
                           className="text-sm font-medium text-text-primary underline underline-offset-2 hover:text-accent"
                         >
                           {v.title}
@@ -782,7 +1184,7 @@ export default function Dashboard() {
             ) : (
               <div className="dashboard-video-grid">
                 {filteredFolders.map((folder, idx) => {
-                  const folderVideos = SAMPLE_VIDEOS.filter((v) => folder.videoIds.includes(v.id))
+                  const folderVideos = allVideos.filter((v) => folder.videoIds.includes(v.id))
                   return (
                     <button
                       key={folder.name}
@@ -794,8 +1196,18 @@ export default function Dashboard() {
                       <div className="aspect-video bg-card p-3 flex items-center justify-center">
                         <div className="grid grid-cols-2 gap-1.5 w-full h-full">
                           {folderVideos.slice(0, 4).map((v) => (
-                            <div key={v.id} className="rounded-md bg-brand-charcoal flex items-center justify-center">
-                              <IconPlay className="w-3.5 h-3.5 text-white/40" />
+                            <div key={v.id} className="rounded-md bg-brand-charcoal flex items-center justify-center overflow-hidden relative">
+                              {v.streamUrl ? (
+                                <video
+                                  src={v.streamUrl}
+                                  className="absolute inset-0 w-full h-full object-cover"
+                                  muted
+                                  playsInline
+                                  preload="metadata"
+                                />
+                              ) : (
+                                <IconPlay className="w-3.5 h-3.5 text-white/40" />
+                              )}
                             </div>
                           ))}
                           {folderVideos.length < 4 &&
@@ -839,29 +1251,38 @@ export default function Dashboard() {
                 </span>
               </div>
               <div className="dashboard-video-grid">
-                {SAMPLE_VIDEOS.filter((v) =>
+                {allVideos.filter((v) =>
                   filteredFolders[openFolderIdx].videoIds.includes(v.id)
                 ).map((v) => (
                   <Link
                     key={v.id}
-                    to={`/${v.id}`}
+                    to={`/video/${v.id}`}
                     className="group block focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-xl min-w-0"
                   >
                     <div className="relative aspect-video rounded-xl overflow-hidden bg-brand-charcoal">
-                      <div className="absolute inset-0 flex items-center justify-center">
+                      {v.streamUrl ? (
+                        <video
+                          src={v.streamUrl}
+                          className="absolute inset-0 w-full h-full object-cover brightness-105"
+                          muted
+                          playsInline
+                          preload="metadata"
+                        />
+                      ) : null}
+                      <div className="absolute inset-0 flex items-center justify-center bg-transparent group-hover:bg-brand-charcoal/40 z-[2] pointer-events-none transition-colors duration-200">
                         <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200">
                           <IconPlay className="w-5 h-5 text-white ml-0.5" />
                         </div>
                       </div>
-                      <span className="absolute left-1/2 -translate-x-1/2 bottom-1.5 px-3 py-1 text-sm font-mono text-white rounded border border-white tabular-nums bg-transparent">
-                        {formatDurationHHMMSS(v.duration)}
+                      <span className="absolute left-1/2 -translate-x-1/2 bottom-1.5 px-3 py-1 text-sm font-mono font-medium text-white rounded border border-white/90 tabular-nums bg-black/50 [text-shadow:0_0_2px_rgba(0,0,0,0.9)]">
+                        {videoDurations[v.id] != null ? formatSecondsToTimestamp(videoDurations[v.id]) : v.duration !== '—' ? formatDurationHHMMSS(v.duration) : '—'}
                       </span>
                     </div>
                     <p className="mt-2.5 text-sm text-text-secondary truncate group-hover:text-text-primary transition-colors">
                       {v.title}
                     </p>
                     <p className="mt-0.5 text-sm text-text-tertiary tabular-nums">
-                      {formatDurationShort(v.duration)}
+                      {videoDurations[v.id] != null ? formatSecondsToTimestamp(videoDurations[v.id]) : formatDurationShort(v.duration)}
                     </p>
                   </Link>
                 ))}
@@ -889,7 +1310,7 @@ export default function Dashboard() {
         onEntityAdded={(selection) => {
           setSearchAttachments((prev) => [
             ...prev,
-            { id: `ent-${Date.now()}`, type: 'entity', name: selection.name?.trim() || selection.file.name, previewUrl: selection.previewUrl },
+            { id: selection.id ?? `ent-${Date.now()}`, type: 'entity', name: selection.name?.trim() || selection.file?.name || 'Entity', previewUrl: selection.previewUrl },
           ])
           setAddEntityModalOpen(false)
         }}

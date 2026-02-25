@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { Link } from 'react-router-dom'
+import { useVideoCache } from '../contexts/VideoCache'
 
 function IconSearch({ className = 'w-4 h-4' }: { className?: string }) {
   return (
@@ -27,120 +28,45 @@ function IconChevronDown({ className = 'w-4 h-4' }: { className?: string }) {
   )
 }
 
-function IconVideo({ className = 'w-4 h-4' }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 9 11" fill="currentColor">
-      <path fillRule="evenodd" clipRule="evenodd" d="M1.03927 1.03269V9.96731L7.91655 5.5L1.03927 1.03269ZM0 0.928981C0 0.182271 0.886347 -0.25826 1.5376 0.164775L8.57453 4.73579C9.14182 5.10429 9.14182 5.89571 8.57453 6.2642L1.5376 10.8352C0.88635 11.2583 0 10.8177 0 10.071V0.928981Z" />
-    </svg>
-  )
+type VideoEntry = {
+  id: string
+  filename: string
+  status: string
+  uploaded_at: string
+  s3_uri?: string
+  clip_count?: number
+  stream_url?: string
 }
 
-type TaskStatus = 'pending' | 'in_progress' | 'completed'
-type Priority = 'low' | 'medium' | 'high'
-type TableEntity = { id: string; name: string; imageUrl?: string; initials: string }
+type StatusFilter = 'all' | 'indexing' | 'ready' | 'failed'
 
-const MOCK_TASKS: Array<{
-  id: string
-  title: string
-  uploadDate: string
-  status: TaskStatus
-  priority: Priority
-  sourceLabel: string
-  category: string
-  tags: string[]
-  entities: TableEntity[]
-}> = [
-  { id: '1', title: 'Review bodycam — Unit 7 patrol', uploadDate: '03-15-2024', status: 'pending', priority: 'low', sourceLabel: 'Officer_Michelle_Henders_bodycam.mp4', category: 'Workplace Safety', tags: ['Workplace Safety', 'Bodycam', 'Unit 7'], entities: [{ id: 'e1', name: 'Karen Nelson', imageUrl: 'https://picsum.photos/128/128?random=1', initials: 'KN' }, { id: 'e2', name: 'Esther Howard', imageUrl: 'https://picsum.photos/128/128?random=2', initials: 'EH' }, { id: 'e6', name: 'Michelle Henderson', initials: 'MH' }] },
-  { id: '2', title: 'Verify crime scene footage', uploadDate: '03-12-2024', status: 'pending', priority: 'low', sourceLabel: 'Officer_Crime_Scene_Footage.mp4', category: 'Compliance Audit', tags: ['Compliance Audit', 'Crime Scene'], entities: [{ id: 'e3', name: 'Robert Fox', imageUrl: 'https://picsum.photos/128/128?random=3', initials: 'RF' }] },
-  { id: '3', title: 'Analyze dashcam — Highway I-95', uploadDate: '03-05-2024', status: 'in_progress', priority: 'medium', sourceLabel: 'DashCam_Highway_I95.mp4', category: 'Facility Inspection', tags: ['Facility Inspection', 'Dashcam', 'Highway'], entities: [{ id: 'e4', name: 'Jane Cooper', imageUrl: 'https://picsum.photos/128/128?random=4', initials: 'JC' }, { id: 'e5', name: 'Jacob Jones', initials: 'JJ' }] },
-  { id: '4', title: 'Review 911 call recording clip', uploadDate: '03-01-2024', status: 'in_progress', priority: 'medium', sourceLabel: '911_Call_2024-08-01.mp4', category: 'Compliance Audit', tags: ['Compliance Audit', '911', 'Recording'], entities: [] },
-  { id: '5', title: 'Verify officer bodycam — Daniel', uploadDate: '02-25-2024', status: 'completed', priority: 'high', sourceLabel: 'Officer_Daniel_Bodycam.mp4', category: 'Workplace Safety', tags: ['Workplace Safety', 'Bodycam', 'Verification'], entities: [{ id: 'e7', name: 'Daniel Smith', imageUrl: 'https://picsum.photos/128/128?random=7', initials: 'DS' }, { id: 'e1', name: 'Karen Nelson', imageUrl: 'https://picsum.photos/128/128?random=1', initials: 'KN' }, { id: 'e8', name: 'Sarah Williams', initials: 'SW' }] },
-  { id: '6', title: 'Cross-check officer bodycam — Michelle', uploadDate: '02-20-2024', status: 'completed', priority: 'high', sourceLabel: 'Officer_Michelle_Bodycam.mp4', category: 'Facility Inspection', tags: ['Facility Inspection', 'Bodycam', 'Cross-check'], entities: [{ id: 'e6', name: 'Michelle Henderson', imageUrl: 'https://picsum.photos/128/128?random=6', initials: 'MH' }] },
+const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
+  { value: 'all', label: 'All statuses' },
+  { value: 'indexing', label: 'Indexing' },
+  { value: 'ready', label: 'Ready' },
+  { value: 'failed', label: 'Failed' },
 ]
 
-function EntityAvatars({ entities }: { entities: TableEntity[] }) {
-  if (!entities?.length) return <span className="text-sm text-gray-400">—</span>
-  const maxCircles = 4
-  const show = entities.slice(0, maxCircles)
-  const rest = entities.length - show.length
-  return (
-    <div className="flex items-center gap-0.5">
-      <div className="flex items-center -space-x-2.5">
-        {show.map((e) => (
-          <div
-            key={e.id}
-            className="relative w-7 h-7 rounded-full border-2 border-surface overflow-hidden bg-card shrink-0 flex items-center justify-center ring-1 ring-white"
-            title={e.name}
-          >
-            {e.imageUrl ? (
-              <img src={e.imageUrl} alt="" className="w-full h-full object-cover" />
-            ) : (
-              <span className="text-[10px] font-medium text-gray-600">{e.initials}</span>
-            )}
-          </div>
-        ))}
-      </div>
-      {rest > 0 && (
-        <span
-          className="ml-1.5 min-w-[1.5rem] h-6 px-1.5 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center text-xs font-medium shrink-0"
-          title={`${rest} more`}
-        >
-          +{rest}
-        </span>
-      )}
-    </div>
-  )
-}
-
-function TagPills({ tags }: { tags: string[] }) {
-  if (!tags?.length) return <span className="text-sm text-gray-400">—</span>
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {tags.map((tag) => (
-        <span
-          key={tag}
-          className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-gray-100 text-gray-700 border border-gray-200/80"
-        >
-          {tag}
-        </span>
-      ))}
-    </div>
-  )
-}
-
-function PriorityTag({ priority }: { priority: Priority }) {
-  const styles = {
-    low: 'bg-success/10 text-success border border-success/20',
-    medium: 'bg-warning/10 text-warning border border-warning/20',
-    high: 'bg-error/10 text-error border border-error/20',
+function StatusBadge({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    ready: 'bg-green-50 text-green-700 border border-green-200',
+    indexing: 'bg-blue-50 text-blue-700 border border-blue-200',
+    failed: 'bg-red-50 text-red-700 border border-red-200',
   }
-  const label = priority.charAt(0).toUpperCase() + priority.slice(1)
   return (
-    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${styles[priority]}`}>
-      {label}
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${styles[status] || 'bg-gray-100 text-gray-700 border border-gray-200'}`}>
+      {status === 'indexing' && <div className="w-2 h-2 border border-blue-500 border-t-transparent rounded-full animate-spin" />}
+      {status.charAt(0).toUpperCase() + status.slice(1)}
     </span>
   )
 }
 
-const TASK_STATUS_OPTIONS: Array<{ value: TaskStatus | 'all'; label: string }> = [
-  { value: 'all', label: 'All statuses' },
-  { value: 'pending', label: 'Pending' },
-  { value: 'in_progress', label: 'In progress' },
-  { value: 'completed', label: 'Completed' },
-]
-
-const TASK_CATEGORIES = ['Workplace Safety', 'Compliance Audit', 'Facility Inspection'] as const
-
-function TasksFilterDropdown({
+function FilterDropdown({
   statusFilter,
-  categoryFilter,
   onStatusChange,
-  onCategoryChange,
 }: {
-  statusFilter: TaskStatus | 'all'
-  categoryFilter: string
-  onStatusChange: (v: TaskStatus | 'all') => void
-  onCategoryChange: (v: string) => void
+  statusFilter: StatusFilter
+  onStatusChange: (v: StatusFilter) => void
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -153,7 +79,8 @@ function TasksFilterDropdown({
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  const hasActiveFilter = statusFilter !== 'all' || categoryFilter !== 'All'
+  const hasFilter = statusFilter !== 'all'
+  const selectedLabel = STATUS_OPTIONS.find((o) => o.value === statusFilter)?.label ?? 'Filter'
 
   return (
     <div ref={ref} className="relative shrink-0">
@@ -161,56 +88,41 @@ function TasksFilterDropdown({
         type="button"
         onClick={() => setOpen((o) => !o)}
         className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-sm font-medium transition-colors h-10 ${
-          open || hasActiveFilter
+          open || hasFilter
             ? 'border-accent bg-accent/5 text-text-primary'
             : 'border-border bg-surface text-text-secondary hover:bg-card'
         }`}
-        aria-label="Filter tasks"
         aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-label={hasFilter ? `Filter: ${selectedLabel}` : 'Filter by status'}
       >
-        <IconFilter className="w-3.5 h-3.5" />
-        Filter
-        <IconChevronDown className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+        <IconFilter className="w-3.5 h-3.5 shrink-0" />
+        <span className="min-w-[4rem] text-left">{hasFilter ? selectedLabel : 'Filter'}</span>
+        <IconChevronDown className={`w-3.5 h-3.5 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
-
       {open && (
-        <div className="absolute right-0 top-full mt-2 w-56 rounded-xl border border-border bg-surface py-2 shadow-xl z-[100]">
+        <div
+          className="absolute right-0 top-full mt-2 w-48 rounded-xl border border-border bg-surface py-2 shadow-xl z-[100]"
+          role="listbox"
+          aria-label="Status filter"
+        >
           <p className="px-4 py-2 text-xs font-medium text-gray-400 uppercase tracking-wider">Status</p>
           <div className="px-2 space-y-0.5">
-            {TASK_STATUS_OPTIONS.map((opt) => (
+            {STATUS_OPTIONS.map((opt) => (
               <button
                 key={opt.value}
                 type="button"
-                onClick={() => onStatusChange(opt.value)}
+                role="option"
+                aria-selected={statusFilter === opt.value}
+                onClick={() => {
+                  onStatusChange(opt.value)
+                  setOpen(false)
+                }}
                 className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                   statusFilter === opt.value ? 'bg-accent/10 text-text-primary' : 'text-text-secondary hover:bg-card'
                 }`}
               >
                 {opt.label}
-              </button>
-            ))}
-          </div>
-          <p className="px-4 py-2 mt-2 text-xs font-medium text-gray-400 uppercase tracking-wider border-t border-gray-100">Category</p>
-          <div className="px-2 space-y-0.5">
-            <button
-              type="button"
-              onClick={() => onCategoryChange('All')}
-              className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                categoryFilter === 'All' ? 'bg-accent/10 text-text-primary' : 'text-text-secondary hover:bg-card'
-              }`}
-            >
-              All categories
-            </button>
-            {TASK_CATEGORIES.map((cat) => (
-              <button
-                key={cat}
-                type="button"
-                onClick={() => onCategoryChange(cat)}
-                className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  categoryFilter === cat ? 'bg-accent/10 text-text-primary' : 'text-text-secondary hover:bg-card'
-                }`}
-              >
-                {cat}
               </button>
             ))}
           </div>
@@ -221,35 +133,48 @@ function TasksFilterDropdown({
 }
 
 export default function UploadsPage() {
+  const { videos: cachedVideos, loading, error, refresh } = useVideoCache()
+  const videos = useMemo<VideoEntry[]>(() =>
+    cachedVideos.map((v) => ({
+      id: v.id,
+      filename: v.metadata?.filename || v.id,
+      status: v.metadata?.status || 'unknown',
+      uploaded_at: v.metadata?.uploaded_at || '',
+      s3_uri: v.metadata?.s3_uri,
+      clip_count: v.metadata?.clip_count,
+      stream_url: v.stream_url,
+    })),
+    [cachedVideos],
+  )
   const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState<TaskStatus | 'all'>('all')
-  const [categoryFilter, setCategoryFilter] = useState('All')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
 
   const filtered = useMemo(() => {
-    let list = MOCK_TASKS
+    let list = videos
     if (statusFilter !== 'all') {
-      list = list.filter((t) => t.status === statusFilter)
-    }
-    if (categoryFilter !== 'All') {
-      list = list.filter((t) => t.category === categoryFilter)
+      const want = statusFilter.toLowerCase()
+      list = list.filter((v) => (v.status || '').toLowerCase() === want)
     }
     if (search.trim()) {
       const q = search.toLowerCase()
-      list = list.filter(
-        (t) =>
-          t.title.toLowerCase().includes(q) ||
-          t.sourceLabel.toLowerCase().includes(q) ||
-          t.category.toLowerCase().includes(q)
-      )
+      list = list.filter((v) => v.filename.toLowerCase().includes(q))
     }
     return list
-  }, [search, statusFilter, categoryFilter])
+  }, [videos, search, statusFilter])
+
+  function formatDate(iso: string) {
+    if (!iso) return '—'
+    try {
+      return new Date(iso).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })
+    } catch { return iso }
+  }
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
-      <h1 className="text-2xl font-semibold text-text-primary mb-6">{filtered.length} Tasks</h1>
+      <h1 className="text-2xl font-semibold text-text-primary mb-6">
+        {loading ? 'Videos' : `${filtered.length} ${filtered.length === 1 ? 'Video' : 'Videos'}`}
+      </h1>
 
-      {/* Search bar with filter aside — TwelveLabs UI */}
       <div className="flex flex-wrap items-center gap-2 mb-6">
         <div className="flex-1 min-w-[200px] relative">
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
@@ -257,75 +182,69 @@ export default function UploadsPage() {
           </span>
           <input
             type="search"
-            placeholder="Search"
+            placeholder="Search videos..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full h-10 pl-10 pr-4 rounded-xl border border-border bg-surface text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
           />
         </div>
-        <TasksFilterDropdown
-          statusFilter={statusFilter}
-          categoryFilter={categoryFilter}
-          onStatusChange={setStatusFilter}
-          onCategoryChange={setCategoryFilter}
-        />
-        <button
-          type="button"
-          className="h-10 px-5 rounded-xl bg-brand-charcoal text-brand-white text-sm font-medium hover:bg-gray-700 transition-colors shrink-0"
-        >
-          Search
-        </button>
+        <FilterDropdown statusFilter={statusFilter} onStatusChange={setStatusFilter} />
       </div>
 
-      <div className="rounded-xl border border-border bg-surface overflow-hidden">
-        <table className="w-full text-left">
-          <thead>
-            <tr className="border-b border-border bg-card">
-              <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Task title
-              </th>
-              <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Upload date
-              </th>
-              <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Risk level
-              </th>
-              <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Tag
-              </th>
-              <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Entities
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {filtered.map((task) => (
-              <tr key={task.id} className="hover:bg-card/80 transition-colors">
-                <td className="px-4 py-3">
-                  <Link
-                    to={`/${task.id}`}
-                    className="text-sm font-medium text-text-primary underline underline-offset-2 hover:text-accent"
-                  >
-                    {task.title}
-                  </Link>
-                </td>
-                <td className="px-4 py-3 text-sm text-gray-600 tabular-nums">
-                  {task.uploadDate}
-                </td>
-                <td className="px-4 py-3">
-                  <PriorityTag priority={task.priority} />
-                </td>
-                <td className="px-4 py-3">
-                  <TagPills tags={task.tags} />
-                </td>
-                <td className="px-4 py-3">
-                  <EntityAvatars entities={task.entities} />
-                </td>
+      {loading && (
+        <div className="flex flex-col items-center py-16 gap-3">
+          <div className="w-8 h-8 border-2 border-gray-300 border-t-gray-800 rounded-full animate-spin" />
+          <p className="text-sm text-text-tertiary">Loading videos...</p>
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-center">
+          <p className="text-sm text-red-700 mb-3">Failed to load: {error}</p>
+          <button type="button" onClick={() => refresh(true)} className="text-sm font-medium text-red-600 hover:text-red-800 underline underline-offset-2">Retry</button>
+        </div>
+      )}
+
+      {!loading && !error && videos.length === 0 && (
+        <div className="flex flex-col items-center py-16 gap-4 text-text-tertiary">
+          <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center">
+            <svg className="w-8 h-8 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="23 7 16 12 23 17 23 7" />
+              <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+            </svg>
+          </div>
+          <p className="text-sm">No videos uploaded yet. Use "Upload Assets" to get started.</p>
+        </div>
+      )}
+
+      {!loading && !error && filtered.length > 0 && (
+        <div className="rounded-xl border border-border bg-surface overflow-hidden">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="border-b border-border bg-card">
+                <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Filename</th>
+                <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Upload date</th>
+                <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Clips</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {filtered.map((v) => (
+                <tr key={v.id} className="hover:bg-card/80 transition-colors">
+                  <td className="px-4 py-3">
+                    <Link to={`/video/${v.id}`} className="text-sm font-medium text-text-primary underline underline-offset-2 hover:text-accent">
+                      {v.filename}
+                    </Link>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-gray-600 tabular-nums">{formatDate(v.uploaded_at)}</td>
+                  <td className="px-4 py-3"><StatusBadge status={v.status} /></td>
+                  <td className="px-4 py-3 text-sm text-gray-600">{v.clip_count ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

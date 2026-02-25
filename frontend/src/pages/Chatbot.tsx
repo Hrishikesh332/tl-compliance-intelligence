@@ -2,6 +2,8 @@ import { useState, useRef, useEffect, useLayoutEffect, type FormEvent } from 're
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+
 function IconChevronDown({ className = 'w-3.5 h-3.5' }: { className?: string }) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -31,25 +33,29 @@ const SUGGESTIONS_SINGLE_VIDEO: string[] = [
   'Are proper safety protocols being followed?',
 ]
 
-type AssetOption = { id: string; title: string }
-const CHAT_ASSETS: AssetOption[] = [
-  { id: '', title: 'Select Assets' },
-  { id: 'abc123', title: 'Officer_patrol_downtown.mp4' },
-  { id: 'def456', title: 'Highway_pursuit_I95.mp4' },
-  { id: 'ghi789', title: 'Warehouse_east_entrance.mp4' },
-  { id: 'jkl012', title: 'Vehicle_collision_claim_4821.mp4' },
-  { id: 'mno345', title: 'Night_shift_lobby_cam.mp4' },
-  { id: 'pqr678', title: 'Kitchen_incident_report.mp4' },
-  { id: 'stu901', title: 'Traffic_stop_dash_032.mp4' },
-  { id: 'vwx234', title: 'Foot_chase_bodycam_unit7.mp4' },
-]
+type AssetOption = { id: string; title: string; streamUrl?: string }
+
+const SELECT_ASSETS_OPTION: AssetOption = { id: '', title: 'Select Assets' }
 
 function displayName(title: string, id: string) {
   return id ? title.replace(/\.[^.]+$/, '') : title
 }
 
-function AssetThumbnail({ size = 'sm' }: { size?: 'sm' | 'md' }) {
+function AssetThumbnail({ size = 'sm', streamUrl }: { size?: 'sm' | 'md'; streamUrl?: string }) {
   const dim = size === 'sm' ? 'w-5 h-5' : 'w-6 h-6'
+  const baseClass = `${dim} shrink-0 rounded overflow-hidden bg-gray-200 object-cover`
+  if (streamUrl) {
+    return (
+      <video
+        src={streamUrl}
+        muted
+        playsInline
+        preload="metadata"
+        className={baseClass}
+        aria-hidden
+      />
+    )
+  }
   return <div className={`${dim} shrink-0 rounded bg-gray-200`} aria-hidden />
 }
 
@@ -140,7 +146,7 @@ function AssetsDropdown({
           >
             {opt.id ? (
               <>
-                <AssetThumbnail size="sm" />
+                <AssetThumbnail size="sm" streamUrl={opt.streamUrl} />
                 <span className="truncate">{displayName(opt.title, opt.id)}</span>
               </>
             ) : (
@@ -165,7 +171,7 @@ function AssetsDropdown({
       >
         {selected.id ? (
           <>
-            <AssetThumbnail size="sm" />
+            <AssetThumbnail size="sm" streamUrl={selected.streamUrl} />
             <span className="truncate text-left max-w-[80px]">{displayName(selected.title, selected.id)}</span>
           </>
         ) : (
@@ -294,17 +300,90 @@ function getResponse(input: string): string {
   return `I've analyzed your query: "${input}"\n\nBased on the indexed video library, I can help you with compliance analysis, risk assessment, people detection, and object identification. Select a video above for questions about that video, or ask about your library.`
 }
 
+/** Pad number to 2 digits for mm:ss */
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : String(n)
+}
+
+/**
+ * Parse Pegasus-style timestamps in text and return segments.
+ * Matches: "212s (03:32)", "0s (00:00)~212s (03:32)", "438 seconds (07:18)", "11:33 to 11:43".
+ */
+function parseTimestampSegments(text: string): Array<{ type: 'text'; value: string } | { type: 'ts'; seconds: number; label: string }> {
+  const segments: Array<{ type: 'text'; value: string } | { type: 'ts'; seconds: number; label: string }> = []
+  // Pattern A: range "0s (00:00)~212s (03:32)" | single "212s (03:32)"
+  // Pattern B: "438 seconds (07:18)"
+  // Pattern C: "11:33 to 11:43" or "20:13 to 20:21" (MM:SS to MM:SS) — groups 10,11,12,13
+  const fullRe = /(\d+)s\s*\((\d{1,2}):(\d{2})\)(?:\s*~\s*(\d+)s\s*\((\d{1,2}):(\d{2})\))?|(\d+)\s+seconds?\s*\((\d{1,2}):(\d{2})\)|(\d{1,2}):(\d{2})\s+to\s+(\d{1,2}):(\d{2})/gi
+  let m: RegExpExecArray | null
+  let lastEnd = 0
+  while ((m = fullRe.exec(text)) !== null) {
+    if (m.index > lastEnd) {
+      segments.push({ type: 'text', value: text.slice(lastEnd, m.index) })
+    }
+    // "MM:SS to MM:SS" pattern (groups 10–13)
+    if (m[10] !== undefined && m[10].length > 0) {
+      const startM = parseInt(m[10], 10)
+      const startS = parseInt(m[11], 10)
+      const endM = parseInt(m[12], 10)
+      const endS = parseInt(m[13], 10)
+      const seconds = startM * 60 + startS
+      segments.push({
+        type: 'ts',
+        seconds,
+        label: `${pad2(startM)}:${pad2(startS)}–${pad2(endM)}:${pad2(endS)}`,
+      })
+    } else if (m[7] !== undefined && m[7].length > 0) {
+      // "XXX seconds (MM:SS)" pattern (groups 7, 8, 9)
+      const sec = parseInt(m[7], 10)
+      const min = parseInt(m[8], 10)
+      const secPart = parseInt(m[9], 10)
+      segments.push({
+        type: 'ts',
+        seconds: sec,
+        label: `${pad2(min)}:${pad2(secPart)}`,
+      })
+    } else if (m[4] !== undefined && m[4].length > 0) {
+      // Range: 0s (00:00)~212s (03:32)
+      const startM = parseInt(m[2], 10)
+      const startS = parseInt(m[3], 10)
+      const endM = parseInt(m[5], 10)
+      const endS = parseInt(m[6], 10)
+      segments.push({
+        type: 'ts',
+        seconds: parseInt(m[1], 10),
+        label: `${pad2(startM)}:${pad2(startS)}–${pad2(endM)}:${pad2(endS)}`,
+      })
+    } else {
+      // Single: 212s (03:32)
+      segments.push({
+        type: 'ts',
+        seconds: parseInt(m[1], 10),
+        label: `${pad2(parseInt(m[2], 10))}:${pad2(parseInt(m[3], 10))}`,
+      })
+    }
+    lastEnd = m.index + m[0].length
+  }
+  if (lastEnd < text.length) {
+    segments.push({ type: 'text', value: text.slice(lastEnd) })
+  }
+  return segments.length ? segments : [{ type: 'text', value: text }]
+}
+
 export type ChatbotProps = {
   fixedVideoId?: string
   onClose?: () => void
+  /** When set, timestamps in assistant messages become clickable and seek the video to this time (seconds). */
+  onSeekToTime?: (seconds: number) => void
 }
 
-export default function Chatbot({ fixedVideoId, onClose }: ChatbotProps = {}) {
+export default function Chatbot({ fixedVideoId, onClose, onSeekToTime }: ChatbotProps = {}) {
   const [searchParams] = useSearchParams()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isTyping, setIsTyping] = useState(false)
   const [selectedVideoId, setSelectedVideoId] = useState(fixedVideoId ?? '')
+  const [assetOptions, setAssetOptions] = useState<AssetOption[]>([SELECT_ASSETS_OPTION])
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -316,14 +395,40 @@ export default function Chatbot({ fixedVideoId, onClose }: ChatbotProps = {}) {
 
   useEffect(() => {
     if (fixedVideoId) return
+    let cancelled = false
+    fetch(`${API_BASE}/api/videos`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return
+        const videos = data?.videos ?? []
+        const options: AssetOption[] = [
+          SELECT_ASSETS_OPTION,
+          ...videos.map((v: { id: string; metadata?: { filename?: string }; stream_url?: string }) => ({
+            id: v.id,
+            title: v.metadata?.filename ?? v.id,
+            streamUrl: v.stream_url,
+          })),
+        ]
+        setAssetOptions(options)
+      })
+      .catch(() => {
+        if (!cancelled) setAssetOptions([SELECT_ASSETS_OPTION])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [fixedVideoId])
+
+  useEffect(() => {
+    if (fixedVideoId) return
     const videoFromUrl = searchParams.get('video')
-    if (videoFromUrl && CHAT_ASSETS.some((a) => a.id === videoFromUrl)) {
+    if (videoFromUrl && assetOptions.some((a) => a.id === videoFromUrl)) {
       setSelectedVideoId(videoFromUrl)
     } else {
-      const firstVideo = CHAT_ASSETS.find((a) => a.id)
+      const firstVideo = assetOptions.find((a) => a.id)
       if (firstVideo) setSelectedVideoId(firstVideo.id)
     }
-  }, [searchParams, fixedVideoId])
+  }, [searchParams, fixedVideoId, assetOptions])
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -335,7 +440,7 @@ export default function Chatbot({ fixedVideoId, onClose }: ChatbotProps = {}) {
     inputRef.current?.focus()
   }, [])
 
-  function handleSend(text?: string) {
+  async function handleSend(text?: string) {
     const msg = (text ?? input).trim()
     if (!msg || isTyping) return
 
@@ -351,6 +456,41 @@ export default function Chatbot({ fixedVideoId, onClose }: ChatbotProps = {}) {
 
     if (inputRef.current) {
       inputRef.current.style.height = 'auto'
+    }
+
+    const videoIdForApi = fixedVideoId || (selectedVideoId || '').trim() || null
+    if (videoIdForApi) {
+      try {
+        const res = await fetch(`${API_BASE}/api/ask-video`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ video_id: videoIdForApi, message: msg }),
+        })
+        const data = await res.json().catch(() => ({}))
+        const content = res.ok ? (data.answer ?? 'No response.') : (data.error ?? `Error: ${res.status}`)
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `a-${Date.now()}`,
+            role: 'assistant',
+            content,
+            timestamp: new Date(),
+          },
+        ])
+      } catch (err) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `a-${Date.now()}`,
+            role: 'assistant',
+            content: `Failed to ask about this video: ${err instanceof Error ? err.message : 'Network error'}.`,
+            timestamp: new Date(),
+          },
+        ])
+      } finally {
+        setIsTyping(false)
+      }
+      return
     }
 
     const delay = 600 + Math.random() * 1200
@@ -388,7 +528,7 @@ export default function Chatbot({ fixedVideoId, onClose }: ChatbotProps = {}) {
   const isEmpty = messages.length === 0
   const isSingleVideoSelected = Boolean(selectedVideoId)
   const suggestions = isSingleVideoSelected ? SUGGESTIONS_SINGLE_VIDEO : SUGGESTIONS_ALL
-  const selectedAsset = CHAT_ASSETS.find((a) => a.id === selectedVideoId)
+  const selectedAsset = assetOptions.find((a) => a.id === selectedVideoId)
   const showAssetDropdown = !fixedVideoId
 
   return (
@@ -453,7 +593,7 @@ export default function Chatbot({ fixedVideoId, onClose }: ChatbotProps = {}) {
                         : 'bg-white border border-gray-200 text-gray-700 rounded-bl-md shadow-sm'
                     }`}
                   >
-                    {renderContent(msg.content)}
+                    {renderContent(msg.content, msg.role === 'assistant' ? onSeekToTime : undefined)}
                   </div>
                   <p className={`text-[11px] text-gray-400 mt-1 ${msg.role === 'user' ? 'text-right' : ''}`}>
                     {formatTime(msg.timestamp)}
@@ -489,7 +629,7 @@ export default function Chatbot({ fixedVideoId, onClose }: ChatbotProps = {}) {
             <div className="search-bar-gradient-inner flex items-center gap-2 px-3 py-2 min-h-[52px]">
               {showAssetDropdown && (
                 <AssetsDropdown
-                  options={CHAT_ASSETS}
+                  options={assetOptions}
                   value={selectedVideoId}
                   onChange={setSelectedVideoId}
                 />
@@ -519,7 +659,7 @@ export default function Chatbot({ fixedVideoId, onClose }: ChatbotProps = {}) {
   )
 }
 
-function renderContent(text: string) {
+function renderContent(text: string, onSeekToTime?: (seconds: number) => void) {
   const lines = text.split('\n')
   const elements: React.ReactNode[] = []
 
@@ -574,9 +714,27 @@ function renderContent(text: string) {
       continue
     }
 
+    const segments = parseTimestampSegments(line)
+    const hasTimestamps = segments.some((s) => s.type === 'ts')
     elements.push(
       <span key={i}>
-        {formatInline(line)}
+        {hasTimestamps && onSeekToTime
+          ? segments.map((seg, idx) =>
+              seg.type === 'text' ? (
+                <span key={idx}>{formatInline(seg.value)}</span>
+              ) : (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => onSeekToTime(seg.seconds)}
+                  className="inline-flex items-center px-2 py-0.5 rounded-full bg-accent text-white hover:opacity-90 text-xs font-medium tabular-nums mx-0.5 align-baseline"
+                  title={`Seek to ${seg.label}`}
+                >
+                  {seg.label}
+                </button>
+              )
+            )
+          : formatInline(line)}
         {i < lines.length - 1 && <br />}
       </span>
     )

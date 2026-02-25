@@ -16,6 +16,9 @@ instance/
 .env
 .env.local
 
+# Persistent vector store data
+data/
+
 # IDE / OS
 .idea/
 .vscode/
