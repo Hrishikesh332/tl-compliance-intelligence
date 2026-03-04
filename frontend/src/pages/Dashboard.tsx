@@ -4,6 +4,7 @@ import AddImageModal from '../components/AddImageModal'
 import AddEntityModal, { type EntitySelection } from '../components/AddEntityModal'
 import { useVideoCache, type CachedVideo } from '../contexts/VideoCache'
 import searchIconUrl from '../../strand/icons/search.svg?url'
+import arrowBoxUpIconUrl from '../../strand/icons/arrow-box-up.svg?url'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
@@ -480,7 +481,9 @@ function AdvancedParamsDropdown({
 /*  Dashboard                                                          */
 /* ------------------------------------------------------------------ */
 
-export default function Dashboard() {
+type DashboardProps = { onOpenUpload?: () => void }
+
+export default function Dashboard({ onOpenUpload }: DashboardProps) {
   const [addImageModalOpen, setAddImageModalOpen] = useState(false)
   const [addEntityModalOpen, setAddEntityModalOpen] = useState(false)
   const [searchAttachments, setSearchAttachments] = useState<SearchAttachment[]>([])
@@ -1032,11 +1035,31 @@ export default function Dashboard() {
       {/* ─── Videos view ─── */}
       {viewMode === 'videos' && (
         <>
-          {filteredVideos.length === 0 ? (
-            <p className="text-center text-gray-500 py-16">No videos match your search.</p>
-          ) : (
-            <div className="dashboard-video-grid">
-              {filteredVideos.map((v) => (
+          <div className="dashboard-video-grid">
+            {onOpenUpload && (
+              <button
+                type="button"
+                onClick={onOpenUpload}
+                className="group flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-border bg-card hover:border-gray-400 hover:bg-gray-200/80 transition-all duration-200 text-left focus:outline-none focus:ring-2 focus:ring-accent/30 focus:ring-offset-2 aspect-video min-w-0 py-4 px-3"
+              >
+                <span className="flex items-center justify-center w-11 h-11 text-text-tertiary group-hover:text-text-secondary transition-colors mb-3">
+                  <img src={arrowBoxUpIconUrl} alt="" className="w-5 h-5" aria-hidden />
+                </span>
+                <p className="text-sm font-semibold text-text-primary">Drop videos or browse files</p>
+                <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
+                  <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium text-text-secondary border border-border">
+                    MP4, MOV, AVI
+                  </span>
+                  <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium text-text-secondary border border-border">
+                    Max 300 MB
+                  </span>
+                </div>
+                <p className="mt-2.5 text-[11px] sm:text-xs text-text-tertiary max-w-[200px] text-center leading-snug">
+                  Processing takes ~2–3 min (indexing, tool detection, analysis)
+                </p>
+              </button>
+            )}
+            {filteredVideos.map((v) => (
                 <Link
                   key={v.id}
                   to={`/video/${v.id}`}
@@ -1111,7 +1134,6 @@ export default function Dashboard() {
                 </Link>
               ))}
             </div>
-          )}
         </>
       )}
 

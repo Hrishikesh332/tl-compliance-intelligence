@@ -180,3 +180,11 @@ body {
   animation: placeholder-slide 3s ease-in-out forwards;
 }
 
+/* Overview page: hero gradient mesh */
+.overview-hero-gradient {
+  background:
+    radial-gradient(ellipse 60% 50% at 15% 80%, var(--strand-product-embed, #6CD5FD) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 60% at 85% 20%, var(--strand-product-search, #F6AFFF) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 40% at 50% 50%, var(--strand-ui-accent, #00DC82) 0%, transparent 60%);
+}
+

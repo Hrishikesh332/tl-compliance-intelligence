@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react'
 import { useParams, useLocation, Link } from 'react-router-dom'
+import { jsPDF } from 'jspdf'
 import LinkAnalysisModal, { type PersonLinkData } from '../components/LinkAnalysisModal'
 import Chatbot from './Chatbot'
 import { useVideoCache } from '../contexts/VideoCache'
@@ -38,22 +39,30 @@ type PersonInsight = {
   avatar: string
   percent: number
   face_snap_base64?: string | null
-  /** Face cropped from this video (from frame at best clip); preferred for display */
   face_from_video_base64?: string | null
   clips: Array<{ start: number; end: number; score: number }>
+}
+/** Detected face from keyframes (no entity matching) */
+type DetectedFace = {
+  face_id: number
+  confidence: number
+  image_base64: string
+  bbox?: { x: number; y: number; w: number; h: number }
+  timestamps: number[]
+  appearance_count: number
 }
 type ObjectInsight = {
   object: string
   timestamp: number
   frame_url?: string
-  /** Normalized 0–1 bounding box from Rekognition (left, top, width, height) */
   bbox?: { left: number; top: number; width: number; height: number }
 }
 type VideoInsights = {
-  people: PersonInsight[]
-  mentioned: string[]
+  people?: PersonInsight[]
+  mentioned?: string[]
+  detected_faces?: DetectedFace[]
   objects: ObjectInsight[]
-  link_data_by_entity: Record<string, PersonLinkData>
+  link_data_by_entity?: Record<string, PersonLinkData>
   video_duration_sec: number
 }
 
@@ -254,31 +263,332 @@ function TimelineBar({
   )
 }
 
+function fmtSecPdf(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '—'
+  const m = Math.floor(seconds / 60)
+  const s = Math.floor(seconds % 60)
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
 function PdfReportModal({
   open,
   onClose,
   videoId,
-  title,
-  riskLevel,
-  risks,
+  videoAnalysis,
+  detectedFaces = [],
+  objects = [],
 }: {
   open: boolean
   onClose: () => void
   videoId: string
-  title: string
-  riskLevel: string
-  risks: Array<{ label: string; severity: string }>
+  videoAnalysis: VideoAnalysisData
+  detectedFaces?: DetectedFace[]
+  objects?: ObjectInsight[]
 }) {
   if (!open) return null
 
-  function handleDownload() {
-    const blob = new Blob(['Compliance report for ' + videoId], { type: 'application/pdf' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `compliance-report-${videoId}.pdf`
-    a.click()
-    URL.revokeObjectURL(url)
+  const { title, description, categories, topics, riskLevel, risks, transcript } = videoAnalysis
+  const objectsCount = objects.length
+  const detectedFacesCount = detectedFaces.length
+
+  async function handleDownload() {
+    const doc = new jsPDF({ format: 'a4', unit: 'mm' })
+    const margin = 18
+    const footerH = 12
+    const pageW = doc.internal.pageSize.getWidth()
+    const pageH = doc.internal.pageSize.getHeight()
+    const contentH = pageH - margin - footerH
+    const maxW = pageW - margin * 2
+    let y = margin
+    let sectionNum = 0
+    const lineHeight = 5.5
+    const sectionGap = 12
+    const headingUnderline = 0.3
+
+    function checkPage(need: number = 24) {
+      if (y + need > contentH) {
+        doc.addPage()
+        y = margin
+      }
+    }
+
+    function addFooter(pageNum: number, totalPages: number) {
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(8)
+      doc.setTextColor(120, 120, 120)
+      const footerY = pageH - 6
+      doc.text(
+        `Compliance Intelligence Report  ·  ${title || 'Video'}  ·  Page ${pageNum} of ${totalPages}`,
+        margin,
+        footerY
+      )
+      doc.text(
+        new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }),
+        pageW - margin,
+        footerY,
+        { align: 'right' }
+      )
+      doc.setTextColor(0, 0, 0)
+    }
+
+    function addSectionHeading(text: string, fontSize: number = 12) {
+      sectionNum += 1
+      checkPage(16)
+      doc.setDrawColor(60, 60, 60)
+      doc.setLineWidth(headingUnderline)
+      doc.line(margin, y - 2, margin + 40, y - 2)
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'normal')
+      doc.setTextColor(100, 100, 100)
+      doc.text(`Section ${sectionNum}`, margin, y)
+      doc.setTextColor(0, 0, 0)
+      y += 5
+      doc.setFontSize(fontSize)
+      doc.setFont('helvetica', 'bold')
+      doc.text(text, margin, y)
+      y += lineHeight + 4
+    }
+
+    function addBody(text: string, fontSize: number = 10) {
+      doc.setFontSize(fontSize)
+      doc.setFont('helvetica', 'normal')
+      const lines = doc.splitTextToSize(text, maxW)
+      for (const line of lines) {
+        checkPage(lineHeight)
+        doc.text(line, margin, y)
+        y += lineHeight
+      }
+      y += 4
+    }
+
+    // —— Cover page ——
+    doc.setFillColor(40, 40, 40)
+    doc.rect(0, 0, pageW, 32, 'F')
+    doc.setTextColor(255, 255, 255)
+    doc.setFontSize(18)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Compliance Intelligence Report', margin, 20)
+    doc.setFontSize(11)
+    doc.setFont('helvetica', 'normal')
+    doc.text('Video analysis, risk assessment & transcript', margin, 28)
+    doc.setTextColor(0, 0, 0)
+
+    y = 50
+    doc.setFontSize(14)
+    doc.setFont('helvetica', 'bold')
+    doc.text(title || 'Video Analysis', margin, y)
+    y += lineHeight + 2
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'normal')
+    doc.setTextColor(80, 80, 80)
+    doc.text(`Video ID: ${videoId}`, margin, y)
+    y += lineHeight
+    doc.text(`Generated: ${new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`, margin, y)
+    doc.setTextColor(0, 0, 0)
+    y = pageH - footerH - 10
+    doc.setDrawColor(200, 200, 200)
+    doc.setLineWidth(0.5)
+    doc.line(margin, y, pageW - margin, y)
+    doc.addPage()
+    y = margin
+
+    // —— Executive summary ——
+    addSectionHeading('Executive summary', 11)
+    const riskColor = riskLevel === 'high' ? [180, 60, 60] : riskLevel === 'medium' ? [180, 120, 40] : [60, 120, 80]
+    doc.setFillColor(riskColor[0], riskColor[1], riskColor[2])
+    doc.roundedRect(margin, y, 14, 8, 1.5, 1.5, 'F')
+    doc.setTextColor(255, 255, 255)
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'bold')
+    doc.text((riskLevel || '—').toUpperCase(), margin + 3, y + 5.5)
+    doc.setTextColor(0, 0, 0)
+    doc.setFont('helvetica', 'normal')
+    doc.text('  Risk level', margin + 17, y + 5.5)
+    y += 12
+    doc.setFontSize(10)
+    addBody(
+      [
+        `This report covers analysis of the video "${(title || 'Video').slice(0, 50)}${(title || '').length > 50 ? '…' : ''}". `,
+        `Categories: ${categories?.length ?? 0}. Topics: ${topics?.length ?? 0}. `,
+        `Key findings: ${risks?.length ?? 0} risk(s). `,
+        detectedFacesCount > 0 || objectsCount > 0
+          ? `Insights: ${detectedFacesCount} face(s), ${objectsCount} object(s) detected. `
+          : '',
+        transcript?.length ? `Full transcript: ${transcript.length} segment(s).` : '',
+      ].join('')
+    )
+    y += sectionGap
+
+    // —— Description ——
+    addSectionHeading('Description')
+    addBody(description || 'No description available.')
+
+    // —— Categories & topics ——
+    if (categories?.length) {
+      addSectionHeading('Categories')
+      addBody(categories.join('  ·  '))
+    }
+    if (topics?.length) {
+      addSectionHeading('Topics')
+      addBody(topics.join('  ·  '))
+    }
+
+    // —— Risk assessment ——
+    addSectionHeading('Risk assessment')
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(10)
+    doc.text(`Level: ${(riskLevel || '—').toUpperCase()}`, margin, y)
+    y += lineHeight + 6
+
+    if (risks?.length) {
+      doc.setFontSize(10)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Key findings', margin, y)
+      y += lineHeight + 3
+      for (const r of risks) {
+        checkPage(lineHeight * 2)
+        const severityColor = r.severity === 'high' ? [180, 60, 60] : r.severity === 'medium' ? [180, 120, 40] : [80, 120, 80]
+        doc.setFillColor(severityColor[0], severityColor[1], severityColor[2])
+        doc.roundedRect(margin, y - 3.5, 3, 3, 0.5, 0.5, 'F')
+        doc.setFont('helvetica', 'normal')
+        doc.setFontSize(10)
+        const labelLines = doc.splitTextToSize(r.label || '', maxW - 28)
+        for (let i = 0; i < labelLines.length; i++) {
+          doc.text(labelLines[i], margin + 6, y)
+          if (i === 0) doc.text(String(r.severity || '').toUpperCase(), pageW - margin - 18, y)
+          y += lineHeight
+        }
+        if (r.timestamp) {
+          doc.setFontSize(9)
+          doc.setTextColor(100, 100, 100)
+          doc.text(`Time: ${r.timestamp}`, margin + 6, y)
+          doc.setTextColor(0, 0, 0)
+          y += lineHeight
+        }
+        y += 4
+      }
+      y += 4
+    }
+
+    // —— Detected faces ——
+    if (detectedFacesCount > 0) {
+      addSectionHeading('Detected faces')
+      addBody(`${detectedFacesCount} unique face(s) detected from keyframes.`)
+      const imgSize = 22
+      const imgGap = 4
+      for (let i = 0; i < detectedFaces.length; i++) {
+        const face = detectedFaces[i]
+        checkPage(imgSize + 20)
+        try {
+          if (face.image_base64) {
+            doc.setDrawColor(220, 220, 220)
+            doc.setLineWidth(0.3)
+            doc.rect(margin, y, imgSize, imgSize)
+            doc.addImage(face.image_base64, 'PNG', margin, y, imgSize, imgSize)
+          }
+        } catch {
+          /* skip image if invalid */
+        }
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(10)
+        doc.text(`Face ${i + 1}`, margin + imgSize + imgGap, y + 5)
+        doc.setFont('helvetica', 'normal')
+        doc.setFontSize(9)
+        doc.text(`Confidence: ${Math.round(face.confidence * 100)}%  ·  Appearances: ${face.appearance_count}`, margin + imgSize + imgGap, y + 11)
+        const tsStr = face.timestamps?.length ? face.timestamps.map(fmtSecPdf).join(', ') : '—'
+        doc.text(`Timestamps: ${tsStr}`, margin + imgSize + imgGap, y + 17)
+        y += imgSize + imgGap + 6
+      }
+      y += sectionGap
+    }
+
+    // —— Detected objects ——
+    if (objectsCount > 0) {
+      addSectionHeading('Detected objects')
+      addBody(`${objectsCount} object(s) detected with timestamps.`)
+      const objectImages = await Promise.all(
+        objects.map(async (obj) => {
+          if (!obj.frame_url) return null
+          try {
+            const res = await fetch(`${API_BASE}${obj.frame_url}`)
+            if (!res.ok) return null
+            const blob = await res.blob()
+            return new Promise<string>((resolve, reject) => {
+              const r = new FileReader()
+              r.onload = () => resolve(r.result as string)
+              r.onerror = reject
+              r.readAsDataURL(blob)
+            })
+          } catch {
+            return null
+          }
+        })
+      )
+      const objImgSize = 28
+      const objImgGap = 6
+      for (let i = 0; i < objects.length; i++) {
+        const obj = objects[i]
+        checkPage(objImgSize + 14)
+        const dataUrl = objectImages[i]
+        if (dataUrl) {
+          try {
+            doc.setDrawColor(220, 220, 220)
+            doc.setLineWidth(0.2)
+            doc.rect(margin, y, objImgSize, objImgSize * 0.75)
+            doc.addImage(dataUrl, 'JPEG', margin, y, objImgSize, objImgSize * 0.75)
+          } catch {
+            /* skip */
+          }
+        }
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(10)
+        doc.text(obj.object || 'Object', margin + (dataUrl ? objImgSize + objImgGap : 0), y + 5)
+        doc.setFont('helvetica', 'normal')
+        doc.setFontSize(9)
+        doc.text(`Timestamp: ${fmtSecPdf(obj.timestamp)}`, margin + (dataUrl ? objImgSize + objImgGap : 0), y + 12)
+        const rowH = dataUrl ? objImgSize * 0.75 + objImgGap : lineHeight * 2 + 2
+        y += rowH + 6
+      }
+      y += sectionGap
+    }
+
+    // —— Transcript ——
+    addSectionHeading('Transcript')
+    if (transcript?.length) {
+      doc.setFontSize(9)
+      doc.setTextColor(80, 80, 80)
+      doc.text(`${transcript.length} segment(s)`, margin, y)
+      doc.setTextColor(0, 0, 0)
+      y += lineHeight + 4
+      for (let idx = 0; idx < transcript.length; idx++) {
+        const seg = transcript[idx]
+        checkPage(lineHeight * 3)
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(9)
+        doc.text(seg.time || '0:00', margin, y)
+        doc.setFont('helvetica', 'normal')
+        const textLines = doc.splitTextToSize(seg.text || '', maxW - 14)
+        doc.text(textLines[0], margin + 14, y)
+        y += lineHeight
+        for (let i = 1; i < textLines.length; i++) {
+          checkPage(lineHeight)
+          doc.text(textLines[i], margin + 14, y)
+          y += lineHeight
+        }
+        y += 4
+      }
+    } else {
+      addBody('No transcript available. Generate transcript from the Transcript section.')
+    }
+
+    // Add footers to all pages
+    const totalPages = doc.getNumberOfPages()
+    for (let p = 1; p <= totalPages; p++) {
+      doc.setPage(p)
+      addFooter(p, totalPages)
+    }
+
+    doc.save(`compliance-report-${videoId}.pdf`)
   }
 
   return (
@@ -307,26 +617,109 @@ function PdfReportModal({
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-5 bg-card">
-          <div className="bg-surface rounded-lg border border-border shadow-sm p-6 text-text-primary">
-            <p className="text-xs text-text-tertiary uppercase tracking-wider mb-2">Compliance Intelligence Report</p>
-            <h3 className="text-lg font-semibold text-text-primary mb-1">{title}</h3>
-            <p className="text-sm text-text-secondary mb-4">Video ID: {videoId} · Generated: {new Date().toLocaleDateString()}</p>
-            <div className="border-t border-border pt-4 mb-4">
+          <div className="bg-surface rounded-lg border border-border shadow-sm p-6 text-text-primary space-y-5">
+            <p className="text-xs text-text-tertiary uppercase tracking-wider">Compliance Intelligence Report</p>
+            <h3 className="text-lg font-semibold text-text-primary">{toTitleCase(title)}</h3>
+            <p className="text-sm text-text-secondary">Video ID: {videoId} · Generated: {new Date().toLocaleDateString()}</p>
+
+            {description && (
+              <div className="border-t border-border pt-4">
+                <p className="text-xs font-medium text-text-tertiary uppercase mb-2">Description</p>
+                <p className="text-sm text-text-secondary whitespace-pre-wrap">{description}</p>
+              </div>
+            )}
+
+            {categories?.length > 0 && (
+              <div className="border-t border-border pt-4">
+                <p className="text-xs font-medium text-text-tertiary uppercase mb-2">Categories</p>
+                <p className="text-sm text-text-secondary">{categories.join(' · ')}</p>
+              </div>
+            )}
+
+            {topics?.length > 0 && (
+              <div className="border-t border-border pt-4">
+                <p className="text-xs font-medium text-text-tertiary uppercase mb-2">Topics</p>
+                <p className="text-sm text-text-secondary">{topics.join(' · ')}</p>
+              </div>
+            )}
+
+            <div className="border-t border-border pt-4">
               <p className="text-xs font-medium text-text-tertiary uppercase mb-2">Risk level</p>
               <p className="text-sm font-medium capitalize">{riskLevel}</p>
             </div>
+
+            {risks?.length > 0 && (
+              <div className="border-t border-border pt-4">
+                <p className="text-xs font-medium text-gray-500 uppercase mb-2">Key findings</p>
+                <ul className="space-y-1.5 text-sm">
+                  {risks.map((r, i) => (
+                    <li key={i} className="flex justify-between gap-2">
+                      <span>{r.label}</span>
+                      <span className={`shrink-0 text-xs font-medium capitalize ${r.severity === 'high' ? 'text-error' : r.severity === 'medium' ? 'text-warning' : 'text-success'}`}>{r.severity}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {detectedFacesCount > 0 && (
+              <div className="border-t border-border pt-4">
+                <p className="text-xs font-medium text-text-tertiary uppercase mb-2">Detected faces ({detectedFacesCount})</p>
+                <div className="flex flex-wrap gap-4">
+                  {detectedFaces.map((face, i) => (
+                    <div key={i} className="flex items-start gap-3">
+                      <img src={`data:image/png;base64,${face.image_base64}`} alt="" className="w-14 h-14 rounded-full object-cover border border-border" />
+                      <div className="text-sm text-text-secondary">
+                        <p className="font-medium text-text-primary">Face {i + 1}</p>
+                        <p>Confidence: {Math.round(face.confidence * 100)}% · Appearances: {face.appearance_count}</p>
+                        <p className="text-xs text-text-tertiary">Timestamps: {face.timestamps?.length ? face.timestamps.map(fmtSecPdf).join(', ') : '—'}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-text-tertiary mt-2">All face snapshots included in PDF.</p>
+              </div>
+            )}
+
+            {objectsCount > 0 && (
+              <div className="border-t border-border pt-4">
+                <p className="text-xs font-medium text-text-tertiary uppercase mb-2">Detected objects ({objectsCount})</p>
+                <ul className="space-y-2">
+                  {objects.map((obj, i) => (
+                    <li key={i} className="flex items-center gap-3 text-sm">
+                      {obj.frame_url && (
+                        <img src={`${API_BASE}${obj.frame_url}`} alt="" className="w-16 h-12 rounded border border-border object-cover" />
+                      )}
+                      <span className="font-medium text-text-primary">{obj.object}</span>
+                      <span className="text-text-tertiary">at {fmtSecPdf(obj.timestamp)}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-xs text-text-tertiary mt-2">Object snapshots and timestamps included in PDF.</p>
+              </div>
+            )}
+
             <div className="border-t border-border pt-4">
-              <p className="text-xs font-medium text-gray-500 uppercase mb-2">Key findings</p>
-              <ul className="space-y-1.5 text-sm">
-                {risks.map((r, i) => (
-                  <li key={i} className="flex justify-between gap-2">
-                    <span>{r.label}</span>
-                    <span className={`shrink-0 text-xs font-medium capitalize ${r.severity === 'high' ? 'text-error' : r.severity === 'medium' ? 'text-warning' : 'text-success'}`}>{r.severity}</span>
-                  </li>
-                ))}
-              </ul>
+              <p className="text-xs font-medium text-text-tertiary uppercase mb-2">Transcript ({transcript?.length ?? 0} segments)</p>
+              <div className="max-h-48 overflow-y-auto rounded border border-border bg-card p-3 text-sm">
+                {transcript?.length ? (
+                  <ul className="space-y-2">
+                    {transcript.slice(0, 20).map((seg, i) => (
+                      <li key={i}>
+                        <span className="text-text-tertiary font-mono text-xs mr-2">{seg.time}</span>
+                        <span className="text-text-secondary">{seg.text}</span>
+                      </li>
+                    ))}
+                    {transcript.length > 20 && (
+                      <li className="text-text-tertiary text-xs">… and {transcript.length - 20} more (included in PDF)</li>
+                    )}
+                  </ul>
+                ) : (
+                  <p className="text-text-tertiary text-sm">No transcript. Generate from the Transcript section.</p>
+                )}
+              </div>
             </div>
-            <p className="text-xs text-text-tertiary mt-6">This is a preview. Download for full PDF.</p>
+            <p className="text-xs text-text-tertiary">Download for full PDF including face & object snapshots, insights, and complete transcript.</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-3 sm:px-5 py-4 shrink-0 bg-surface rounded-b-xl">
@@ -590,17 +983,26 @@ export default function VideoAnalysis() {
     face_from_video_base64: p.face_from_video_base64,
     clips: p.clips || [],
   })) ?? []
+  const detectedFaces: DetectedFace[] = insights?.detected_faces ?? []
   const mentionedNames: string[] = insights?.mentioned ?? []
   const objectsList: ObjectInsight[] = insights?.objects ?? []
   const linkDataByEntity: Record<string, PersonLinkData> = insights?.link_data_by_entity ?? {}
   const videoDurationSec = insights?.video_duration_sec ?? 0
+  const hasDetectedFaces = detectedFaces.length > 0
+  const peopleCount = hasDetectedFaces ? detectedFaces.length : people.length
 
   const [selectedPerson, setSelectedPerson] = useState<PersonEntry | null>(null)
+  const [selectedFaceIdx, setSelectedFaceIdx] = useState<number | null>(null)
   useEffect(() => {
     if (people.length > 0 && (!selectedPerson || !people.find((p) => p.id === selectedPerson.id)))
       setSelectedPerson(people[0])
     else if (people.length === 0) setSelectedPerson(null)
   }, [insights?.people?.length, insights?.people?.map((p) => p.entity_id).join(',')])
+  useEffect(() => {
+    if (hasDetectedFaces && (selectedFaceIdx === null || selectedFaceIdx >= detectedFaces.length))
+      setSelectedFaceIdx(0)
+    else if (!hasDetectedFaces) setSelectedFaceIdx(null)
+  }, [hasDetectedFaces, detectedFaces.length])
 
   const [activeObjectIdx, setActiveObjectIdx] = useState(0)
   const [reportModalOpen, setReportModalOpen] = useState(false)
@@ -910,14 +1312,14 @@ export default function VideoAnalysis() {
 
           <Section
             title="People"
-            badge={people.length + mentionedNames.length}
+            badge={peopleCount + mentionedNames.length}
             color="bg-accent"
           >
             {insightsLoading && !insights ? (
               <p className="text-sm text-gray-500">Loading insights…</p>
             ) : !insights && !generatingInsights ? (
               <div>
-                <p className="text-sm text-gray-500 mb-3">People and presence are generated from registered entities (faces) that appear in this video. Generate insights after the video is indexed.</p>
+                <p className="text-sm text-gray-500 mb-3">Generate insights to detect faces and objects in this video. Run after the video is indexed.</p>
                 <button
                   type="button"
                   onClick={generateInsights}
@@ -939,7 +1341,7 @@ export default function VideoAnalysis() {
               <>
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                   <p className="text-xs text-gray-500">
-                    Shown people ({people.length})
+                    {hasDetectedFaces ? `Detected faces (${detectedFaces.length})` : `Shown people (${people.length})`}
                   </p>
                   <button
                     type="button"
@@ -950,92 +1352,126 @@ export default function VideoAnalysis() {
                     {generatingInsights ? 'Regenerating…' : 'Regenerate insights'}
                   </button>
                 </div>
-                <div className="flex flex-wrap gap-3 mb-4 p-1 -m-1">
-                  {people.map((p) => {
-                    const isEditing = editingPersonId === p.id
-                    return (
-                      <div key={p.id} className="relative group flex flex-col items-center gap-1">
+
+                {hasDetectedFaces ? (
+                  <>
+                    <div className="flex flex-wrap gap-4 mb-4 p-1 -m-1">
+                      {detectedFaces.map((face, idx) => (
+                        <div key={face.face_id} className="flex flex-col items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedFaceIdx(idx)}
+                            className={`rounded-full ring-2 ring-offset-2 transition-all duration-200 shrink-0 ${
+                              selectedFaceIdx === idx ? 'ring-accent' : 'ring-transparent hover:ring-gray-300'
+                            }`}
+                          >
+                            <div className="w-14 h-14 rounded-full overflow-hidden bg-gray-200 shrink-0 ring-1 ring-gray-300">
+                              <img
+                                src={`data:image/png;base64,${face.image_base64}`}
+                                alt={`Face ${face.face_id + 1}`}
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                          </button>
+                          <span className="text-[10px] text-gray-500">
+                            Face {face.face_id + 1} · {(face.confidence * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap gap-3 mb-4 p-1 -m-1">
+                      {people.map((p) => {
+                        const isEditing = editingPersonId === p.id
+                        return (
+                          <div key={p.id} className="relative group flex flex-col items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedPerson(p)}
+                              className={`relative rounded-full ring-2 ring-offset-2 transition-all duration-200 ${
+                                selectedPerson?.id === p.id ? 'ring-accent' : 'ring-transparent hover:ring-gray-300'
+                              }`}
+                            >
+                              <Avatar initials={p.avatar} size="sm" imageBase64={p.face_from_video_base64 ?? undefined} />
+                              <span
+                                role="button"
+                                tabIndex={0}
+                                onClick={(e) => { e.stopPropagation(); startEditing(p) }}
+                                onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); startEditing(p) } }}
+                                className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-surface border border-border shadow-sm flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                                aria-label={`Edit name for ${p.name}`}
+                              >
+                                <svg className="w-2.5 h-2.5 text-gray-500" viewBox="0 0 12 12" fill="currentColor">
+                                  <path d="M9.08 0.293a1 1 0 011.414 0l1.213 1.213a1 1 0 010 1.414L4.586 10.04 0 12l1.96-4.586L9.08.293zM2.72 7.866l-1.04 2.434 2.434-1.04 6.453-6.453-1.394-1.394L2.72 7.866z" />
+                                </svg>
+                              </span>
+                            </button>
+                            {isEditing ? (
+                              <input
+                                autoFocus
+                                value={editName}
+                                onChange={(e) => setEditName(e.target.value)}
+                                onBlur={() => commitEdit(p.id)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(p.id); if (e.key === 'Escape') setEditingPersonId(null) }}
+                                className="w-20 text-[10px] text-center text-text-primary border border-accent rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-accent bg-surface"
+                              />
+                            ) : (
+                              <span
+                                className="text-[10px] text-gray-500 truncate max-w-[64px] cursor-pointer hover:text-gray-700"
+                                onClick={() => startEditing(p)}
+                                title={`Click to edit: ${p.name}`}
+                              >
+                                {p.name}
+                              </span>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                    {selectedPerson && (
+                      <div className="flex flex-wrap items-center gap-3">
+                        <Avatar initials={selectedPerson.avatar} size="md" imageBase64={selectedPerson.face_from_video_base64 ?? undefined} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-base font-semibold text-gray-700">{selectedPerson.name}</p>
+                          <p className="text-sm text-gray-500">
+                            Appears in {selectedPerson.percent}% of video
+                          </p>
+                        </div>
                         <button
                           type="button"
-                          onClick={() => setSelectedPerson(p)}
-                          className={`relative rounded-full ring-2 ring-offset-2 transition-all duration-200 ${
-                            selectedPerson?.id === p.id
-                              ? 'ring-accent'
-                              : 'ring-transparent hover:ring-gray-300'
-                          }`}
+                          onClick={() => setLinkAnalysisPersonId(selectedPerson.id)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-surface text-xs font-medium text-text-secondary hover:border-border-light hover:bg-card transition-colors shrink-0 w-full sm:w-auto"
                         >
-                          <Avatar initials={p.avatar} size="sm" imageBase64={p.face_from_video_base64 ?? undefined} />
-                          <span
-                            role="button"
-                            tabIndex={0}
-                            onClick={(e) => { e.stopPropagation(); startEditing(p) }}
-                            onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); startEditing(p) } }}
-                            className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-surface border border-border shadow-sm flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
-                            aria-label={`Edit name for ${p.name}`}
-                          >
-                            <svg className="w-2.5 h-2.5 text-gray-500" viewBox="0 0 12 12" fill="currentColor">
-                              <path d="M9.08 0.293a1 1 0 011.414 0l1.213 1.213a1 1 0 010 1.414L4.586 10.04 0 12l1.96-4.586L9.08.293zM2.72 7.866l-1.04 2.434 2.434-1.04 6.453-6.453-1.394-1.394L2.72 7.866z" />
-                            </svg>
-                          </span>
+                          <svg className="w-3.5 h-3.5" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
+                            <circle cx="3" cy="6" r="2" />
+                            <circle cx="9" cy="3" r="2" />
+                            <circle cx="9" cy="9" r="2" />
+                            <line x1="4.8" y1="5.2" x2="7.2" y2="3.8" />
+                            <line x1="4.8" y1="6.8" x2="7.2" y2="8.2" />
+                          </svg>
+                          Link Analysis
                         </button>
-                        {isEditing ? (
-                          <input
-                            autoFocus
-                            value={editName}
-                            onChange={(e) => setEditName(e.target.value)}
-                            onBlur={() => commitEdit(p.id)}
-                            onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(p.id); if (e.key === 'Escape') setEditingPersonId(null) }}
-                            className="w-20 text-[10px] text-center text-text-primary border border-accent rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-accent bg-surface"
-                          />
-                        ) : (
-                          <span
-                            className="text-[10px] text-gray-500 truncate max-w-[64px] cursor-pointer hover:text-gray-700"
-                            onClick={() => startEditing(p)}
-                            title={`Click to edit: ${p.name}`}
-                          >
-                            {p.name}
-                          </span>
-                        )}
                       </div>
-                    )
-                  })}
-                </div>
-
-                <p className="text-xs text-gray-500 mb-2">
-                  Mentioned people ({mentionedNames.length})
-                </p>
-                <div className="flex gap-2 mb-5">
-                  {mentionedNames.map((name) => (
-                    <Tag key={name} label={name} />
-                  ))}
-                </div>
-
-                {selectedPerson && (
-                  <div className="flex flex-wrap items-center gap-3">
-                    <Avatar initials={selectedPerson.avatar} size="md" imageBase64={selectedPerson.face_from_video_base64 ?? undefined} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-base font-semibold text-gray-700">{selectedPerson.name}</p>
-                      <p className="text-sm text-gray-500">
-                        Appears in {selectedPerson.percent}% of video
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setLinkAnalysisPersonId(selectedPerson.id)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-surface text-xs font-medium text-text-secondary hover:border-border-light hover:bg-card transition-colors shrink-0 w-full sm:w-auto"
-                    >
-                      <svg className="w-3.5 h-3.5" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-                        <circle cx="3" cy="6" r="2" />
-                        <circle cx="9" cy="3" r="2" />
-                        <circle cx="9" cy="9" r="2" />
-                        <line x1="4.8" y1="5.2" x2="7.2" y2="3.8" />
-                        <line x1="4.8" y1="6.8" x2="7.2" y2="8.2" />
-                      </svg>
-                      Link Analysis
-                    </button>
-                  </div>
+                    )}
+                  </>
                 )}
-                <TimelineBar segments={timelineSegments} durationSeconds={videoDurationSec} />
+
+                {mentionedNames.length > 0 && (
+                  <>
+                    <p className="text-xs text-gray-500 mb-2">
+                      Mentioned people ({mentionedNames.length})
+                    </p>
+                    <div className="flex gap-2 mb-5">
+                      {mentionedNames.map((name) => (
+                        <Tag key={name} label={name} />
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                {!hasDetectedFaces && <TimelineBar segments={timelineSegments} durationSeconds={videoDurationSec} />}
               </>
             )}
           </Section>
@@ -1170,9 +1606,9 @@ export default function VideoAnalysis() {
             open={reportModalOpen}
             onClose={() => setReportModalOpen(false)}
             videoId={videoId ?? ''}
-            title={toTitleCase(videoAnalysis.title)}
-            riskLevel={videoAnalysis.riskLevel}
-            risks={videoAnalysis.risks}
+            videoAnalysis={videoAnalysis}
+            detectedFaces={insights?.detected_faces ?? []}
+            objects={insights?.objects ?? []}
           />
 
           {hasSearchContext && searchClips.length > 0 && (() => {

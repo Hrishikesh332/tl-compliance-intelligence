@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { BrowserRouter, Routes, Route, NavLink, Link, useLocation } from 'react-router-dom'
+import OverviewPage from './pages/OverviewPage'
 import Dashboard from './pages/Dashboard'
 import VideoAnalysis from './pages/VideoAnalysis'
 import EntitiesPage from './pages/EntitiesPage'
@@ -8,10 +9,10 @@ import UploadVideosModal from './components/UploadVideosModal'
 import { VideoCacheProvider } from './contexts/VideoCache'
 /* Strand: logo and icons from design system (strand/assets, strand/icons) */
 import logoMarkUrl from '../strand/assets/logo-mark.svg?url'
-import uploadAssetIconUrl from '../strand/icons/arrow-box-up.svg?url'
 
 const navItems = [
-  { to: '/', label: 'Dashboard' },
+  { to: '/', label: 'Overview' },
+  { to: '/dashboard', label: 'Dashboard' },
   { to: '/entities', label: 'Entities' },
   { to: '/chat', label: 'Chat' },
 ]
@@ -75,27 +76,19 @@ function Shell() {
               <Link
                 to="/"
                 className="font-brand text-text-primary hover:opacity-80 transition-opacity cursor-pointer shrink-0 text-left bg-transparent border-0 p-0 no-underline block"
-                aria-label="Go to Dashboard"
+                aria-label="Go to Overview"
               >
-                <h1 className="text-base md:text-h5 font-medium truncate">Compliance Intelligence</h1>
+                <h1 className="text-base md:text-h5 font-medium truncate">Multi-Source Legal Evidence Investigator</h1>
               </Link>
               <span className="hidden sm:inline-flex items-center px-2 py-1 rounded-sm border border-border bg-transparent text-text-secondary text-xs font-medium shrink-0 uppercase tracking-wide pointer-events-none select-none">
                 SAMPLE APP
               </span>
             </div>
 
-            {/* Desktop nav + Upload — hidden on mobile */}
+            {/* Desktop nav — hidden on mobile */}
             <nav className="hidden md:flex items-center gap-0.5">
               <NavLinks />
             </nav>
-            <button
-              type="button"
-              onClick={() => setUploadModalOpen(true)}
-              className="hidden md:inline-flex items-center justify-center font-brand h-8 px-3 py-1.5 text-sm rounded-md gap-1.5 bg-brand-charcoal text-brand-white hover:bg-gray-300 hover:text-brand-charcoal transition-all duration-200 ml-1"
-            >
-              <img src={uploadAssetIconUrl} alt="" className="w-4 h-4 shrink-0 invert opacity-90" aria-hidden />
-              Upload Assets
-            </button>
           </div>
 
           {/* Hamburger — visible only on mobile */}
@@ -134,17 +127,6 @@ function Shell() {
         >
           <nav className="flex flex-col p-3 gap-1">
             <NavLinks mobile onNavigate={() => setMobileMenuOpen(false)} />
-            <button
-              type="button"
-              onClick={() => {
-                setUploadModalOpen(true)
-                setMobileMenuOpen(false)
-              }}
-              className="inline-flex items-center justify-center font-brand h-10 px-3 py-2 text-sm rounded-lg gap-2 bg-brand-charcoal text-brand-white hover:bg-gray-300 hover:text-brand-charcoal transition-all duration-200 mt-2"
-            >
-              <img src={uploadAssetIconUrl} alt="" className="w-4 h-4 shrink-0 invert opacity-90" aria-hidden />
-              Upload Assets
-            </button>
           </nav>
         </div>
       </div>
@@ -152,11 +134,12 @@ function Shell() {
       <div className="flex flex-1 overflow-hidden">
         <main className="flex-1 overflow-auto min-w-0" key={location.pathname}>
           <Routes location={location}>
+            <Route path="/" element={<OverviewPage />} />
             <Route
-              path="/"
+              path="/dashboard"
               element={
                 <div className="w-full min-w-0 px-3 sm:px-4 py-4 sm:py-6">
-                  <Dashboard />
+                  <Dashboard onOpenUpload={() => setUploadModalOpen(true)} />
                 </div>
               }
             />
