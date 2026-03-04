@@ -4,6 +4,15 @@ import { jsPDF } from 'jspdf'
 import LinkAnalysisModal, { type PersonLinkData } from '../components/LinkAnalysisModal'
 import Chatbot from './Chatbot'
 import { useVideoCache } from '../contexts/VideoCache'
+/* Strand: design system icons */
+import documentListIconUrl from '../../strand/icons/document-list.svg?url'
+import generateIconUrl from '../../strand/icons/generate.svg?url'
+import exclamationIconUrl from '../../strand/icons/exclamation.svg?url'
+import entityIconUrl from '../../strand/icons/entity.svg?url'
+import visionIconUrl from '../../strand/icons/vision.svg?url'
+import transcriptionIconUrl from '../../strand/icons/transcription.svg?url'
+import checkmarkIconUrl from '../../strand/icons/checkmark.svg?url'
+import spinnerIconUrl from '../../strand/icons/spinner.svg?url'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
@@ -24,13 +33,23 @@ type VideoAnalysisData = {
 
 const DEFAULT_VIDEO_PLACEHOLDER: VideoAnalysisData = {
   title: '—',
-  description: 'No analysis generated yet. Use "Generate analysis" to create a description, categories, topics, risks, and transcript for this video.',
+  description: '',
   categories: [],
   topics: [],
   riskLevel: 'medium',
   risks: [],
   transcript: [],
 }
+
+/** Sections that will appear after analysis — empty state: card uses accent, icon box gets the product/accent tint */
+const ANALYSIS_SECTIONS = [
+  { id: 'description', label: 'Video description', desc: 'Summary and context', iconUrl: documentListIconUrl, iconBg: 'bg-[var(--strand-ui-accent-light)]' },
+  { id: 'categories', label: 'Categories & topics', desc: 'Themes and subject tags', iconUrl: generateIconUrl, iconBg: 'bg-[var(--strand-product-generate-light)]' },
+  { id: 'risks', label: 'Risk involved', desc: 'Issues and severity', iconUrl: exclamationIconUrl, iconBg: 'bg-[var(--strand-product-search-light)]' },
+  { id: 'people', label: 'People', desc: 'Faces and names', iconUrl: entityIconUrl, iconBg: 'bg-[var(--strand-ui-accent-light)]' },
+  { id: 'objects', label: 'Detected objects', desc: 'Items with timestamps', iconUrl: visionIconUrl, iconBg: 'bg-[var(--strand-product-embed-light)]' },
+  { id: 'transcript', label: 'Transcript', desc: 'Speech with times', iconUrl: transcriptionIconUrl, iconBg: 'bg-[var(--strand-product-generate-light)]' },
+] as const
 
 /** From API: /api/videos/:id/insights */
 type PersonInsight = {
@@ -938,6 +957,8 @@ export default function VideoAnalysis() {
 
   const [generatingAnalysis, setGeneratingAnalysis] = useState(false)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
+  /** 0 = idle, 1 = content analysis, 2 = people & objects (unified flow) */
+  const [analysisStep, setAnalysisStep] = useState<0 | 1 | 2>(0)
 
   async function generateAnalysis() {
     if (!videoId) return
@@ -1058,6 +1079,21 @@ export default function VideoAnalysis() {
       setInsightsError(e?.message ?? 'Failed to generate insights')
     } finally {
       setGeneratingInsights(false)
+    }
+  }
+
+  /** Single entry point: run content analysis then people/objects insights; updates analysisStep for UI */
+  async function runFullAnalysis() {
+    if (!videoId) return
+    setAnalysisError(null)
+    setInsightsError(null)
+    setAnalysisStep(1)
+    try {
+      await generateAnalysis()
+      setAnalysisStep(2)
+      await generateInsights()
+    } finally {
+      setAnalysisStep(0)
     }
   }
 
@@ -1224,8 +1260,154 @@ export default function VideoAnalysis() {
 
         <div className="flex-1 overflow-y-auto min-w-0 pr-0 lg:pr-2 order-2 lg:order-1">
 
+          {!rawAnalysis?.title ? (
+            /* Empty state — Strand: typography, radii, shadows, product/accent colors, icons */
+            <div className="py-6 sm:py-8 w-full">
+              <h2 className="font-brand text-h5 sm:text-h4 font-medium text-text-primary tracking-tight mb-1">
+                Analyze this video
+              </h2>
+              <p className="text-base text-text-secondary leading-relaxed mb-6">
+                Get a structured report with description, categories, topics, risks, people, detected objects, and transcript.
+              </p>
+
+              {/* Primary CTA — prominent placement so user focuses on it first */}
+              <div className="mb-8">
+                <button
+                  type="button"
+                  onClick={runFullAnalysis}
+                  disabled={analysisStep !== 0}
+                  className="w-full sm:w-auto min-w-[200px] inline-flex items-center justify-center gap-2 h-11 px-6 rounded-xl bg-brand-charcoal text-brand-white font-brand font-semibold text-base hover:bg-gray-300 hover:text-brand-charcoal disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-brand-charcoal disabled:hover:text-brand-white transition-colors duration-200 shadow-md hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2"
+                >
+                  {analysisStep !== 0 ? (
+                    <>
+                      <img src={spinnerIconUrl} alt="" className="w-4 h-4 animate-spin opacity-90" aria-hidden />
+                      {analysisStep === 1 ? 'Analyzing…' : 'Detecting…'}
+                    </>
+                  ) : (
+                    'Generate Analysis'
+                  )}
+                </button>
+                {(analysisError || insightsError) && (
+                  <p className="mt-3 text-sm text-error" role="alert">{analysisError || insightsError}</p>
+                )}
+              </div>
+
+              <div className="mb-8">
+                <p className="font-brand-xbold text-sm text-text-secondary uppercase tracking-wider mb-4">
+                  What you&apos;ll get
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                  {ANALYSIS_SECTIONS.map(({ id, label, desc, iconUrl, iconBg }) => (
+                    <div
+                      key={id}
+                      className="group flex flex-col rounded-xl border border-border bg-accent/5 overflow-hidden text-left transition-all duration-200 hover:shadow-md hover:border-accent/30"
+                    >
+                      <div className="flex flex-col gap-3 p-4 min-h-[120px]">
+                        <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border shadow-sm ${iconBg}`}>
+                          <img src={iconUrl} alt="" className="w-5 h-5" aria-hidden />
+                        </span>
+                        <div className="flex flex-col gap-0.5 min-w-0">
+                          <span className="font-brand text-sm font-semibold text-text-primary leading-tight">{label}</span>
+                          <span className="text-xs text-text-secondary leading-snug">{desc}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* What analysis includes: two blocks (no step framing), People vs Objects explained */}
+              <div className="space-y-4 mb-6">
+                {/* Block 1: Content overview */}
+                <div className={`rounded-xl border-2 px-4 py-4 transition-all duration-200 ${
+                  analysisStep === 1 ? 'border-accent bg-[var(--strand-ui-accent-light)] shadow-md' : 'border-border bg-card'
+                }`}>
+                  <div className="flex items-start gap-4">
+                    <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                      analysisStep === 1 ? 'bg-brand-charcoal' : 'bg-[var(--strand-product-generate-light)] border border-border'
+                    }`}>
+                      {analysisStep === 1 ? (
+                        <img src={spinnerIconUrl} alt="" className="w-5 h-5 animate-spin opacity-90" aria-hidden />
+                      ) : analysisStep >= 2 ? (
+                        <img src={checkmarkIconUrl} alt="" className="w-5 h-5" aria-hidden />
+                      ) : (
+                        <img src={documentListIconUrl} alt="" className="w-5 h-5" aria-hidden />
+                      )}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="font-brand text-base font-medium text-text-primary">Content overview</p>
+                      <p className="text-sm text-text-secondary mt-1">
+                        A written description of the video, categories and topics, risk level and issues, plus a full transcript with timestamps.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Block 2: People & objects — split so user understands both */}
+                <div className={`rounded-xl border-2 px-4 py-4 transition-all duration-200 ${
+                  analysisStep === 2 ? 'border-accent bg-[var(--strand-ui-accent-light)] shadow-md' : 'border-border bg-card'
+                }`}>
+                  <div className="flex items-start gap-4">
+                    <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                      analysisStep === 2 ? 'bg-brand-charcoal' : 'bg-[var(--strand-product-embed-light)] border border-border'
+                    }`}>
+                      {analysisStep === 2 ? (
+                        <img src={spinnerIconUrl} alt="" className="w-5 h-5 animate-spin opacity-90" aria-hidden />
+                      ) : (
+                        <img src={entityIconUrl} alt="" className="w-5 h-5" aria-hidden />
+                      )}
+                    </span>
+                    <div className="min-w-0 flex-1 space-y-3">
+                      <div>
+                        <p className="font-brand text-base font-medium text-text-primary">People & detected objects</p>
+                        <p className="text-sm text-text-secondary mt-1">
+                          Visual and speech-based insights from the video:
+                        </p>
+                      </div>
+                      <ul className="space-y-2 text-sm">
+                        <li className="flex items-start gap-2">
+                          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-[var(--strand-ui-accent-light)] mt-0.5">
+                            <img src={entityIconUrl} alt="" className="w-3 h-3" aria-hidden />
+                          </span>
+                          <span>
+                            <strong className="font-medium text-text-primary">People</strong>
+                            <span className="text-text-secondary"> — Faces found in the video, who appears when, and names mentioned in speech (e.g. in the transcript).</span>
+                          </span>
+                        </li>
+                        <li className="flex items-start gap-2">
+                          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-[var(--strand-product-embed-light)] mt-0.5">
+                            <img src={visionIconUrl} alt="" className="w-3 h-3" aria-hidden />
+                          </span>
+                          <span>
+                            <strong className="font-medium text-text-primary">Detected objects</strong>
+                            <span className="text-text-secondary"> — Items and objects spotted in frames (e.g. equipment, signs, hazards) with timestamps and thumbnails so you can jump to the moment.</span>
+                          </span>
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {(analysisStep === 1 || analysisStep === 2) && (
+                <div className="rounded-xl border border-border bg-card shadow-sm px-5 py-4 mb-6 flex items-center gap-4">
+                  <span className="w-11 h-11 shrink-0 rounded-xl bg-[var(--strand-ui-accent-light)] flex items-center justify-center">
+                    <img src={spinnerIconUrl} alt="" className="w-5 h-5 animate-spin text-accent" aria-hidden />
+                  </span>
+                  <div>
+                    <p className="font-brand text-base font-medium text-text-primary">
+                      {analysisStep === 1 ? 'Analyzing video content…' : 'Detecting people and objects…'}
+                    </p>
+                    <p className="text-sm text-text-secondary mt-0.5">
+                      {analysisStep === 1 ? 'Generating description, categories, and risks.' : 'This may take a moment.'}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
           <Section title="Video description" color="bg-accent">
-            {rawAnalysis?.title ? (
               <>
                 <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
                   <h4 className="text-base font-semibold text-gray-700 w-fit max-w-full pr-4">{toTitleCase(videoAnalysis.title)}</h4>
@@ -1240,29 +1422,6 @@ export default function VideoAnalysis() {
                 </div>
                 <p className="text-base text-gray-600 leading-relaxed">{videoAnalysis.description}</p>
               </>
-            ) : (
-              <>
-                <p className="text-base text-gray-600 leading-relaxed mb-3">{videoAnalysis.description}</p>
-                <button
-                  type="button"
-                  onClick={generateAnalysis}
-                  disabled={generatingAnalysis}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent/90 disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {generatingAnalysis ? (
-                    <>
-                      <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Generating…
-                    </>
-                  ) : (
-                    'Generate analysis'
-                  )}
-                </button>
-                {analysisError && (
-                  <p className="mt-2 text-sm text-red-600" role="alert">{analysisError}</p>
-                )}
-              </>
-            )}
           </Section>
 
           {rawAnalysis?.title && (
@@ -1545,6 +1704,8 @@ export default function VideoAnalysis() {
               </>
             )}
           </Section>
+            </>
+          )}
         </div>
 
         <div className="w-full lg:w-[420px] shrink-0 flex flex-col gap-3 overflow-hidden order-1 lg:order-2 min-h-0">
