@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { BrowserRouter, Routes, Route, NavLink, Link, useLocation } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
 import OverviewPage from './pages/OverviewPage'
 import Dashboard from './pages/Dashboard'
 import VideoAnalysis from './pages/VideoAnalysis'
@@ -18,25 +18,38 @@ const navItems = [
 ]
 
 function NavLinks({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?: () => void }) {
+  const location = useLocation()
+  const navigate = useNavigate()
   const base = 'font-brand-xbold px-3 py-2 rounded-lg text-sm font-medium transition-colors border'
   const active = 'text-text-primary bg-card border-border'
   const inactive = 'border-transparent text-text-secondary hover:bg-card hover:text-text-primary'
-  const linkClass = ({ isActive }: { isActive: boolean }) =>
-    `${base} ${isActive ? active : inactive} ${mobile ? 'block w-full text-left' : ''}`
+
+  const handleClick = (e: React.MouseEvent, to: string) => {
+    e.preventDefault()
+    onNavigate?.()
+    // From /video/*, client-side navigate often doesn't update the view (RR v7). Use full navigation.
+    if (location.pathname.startsWith('/video/')) {
+      window.location.href = to
+      return
+    }
+    navigate(to)
+  }
 
   return (
     <>
-      {navItems.map((item) => (
-        <NavLink
-          key={item.to}
-          to={item.to}
-          end
-          className={linkClass}
-          onClick={onNavigate}
-        >
-          {item.label}
-        </NavLink>
-      ))}
+      {navItems.map((item) => {
+        const isActive = item.to === '/' ? location.pathname === '/' : (location.pathname === item.to || location.pathname.startsWith(item.to + '/'))
+        return (
+          <button
+            key={item.to}
+            type="button"
+            onClick={(e) => handleClick(e, item.to)}
+            className={`${base} ${isActive ? active : inactive} ${mobile ? 'block w-full text-left' : ''}`}
+          >
+            {item.label}
+          </button>
+        )
+      })}
     </>
   )
 }
@@ -46,6 +59,7 @@ function Shell() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const location = useLocation()
+  const navigate = useNavigate()
 
   useEffect(() => {
     setMobileMenuOpen(false)
@@ -73,13 +87,14 @@ function Shell() {
         <header className="bg-background px-4 py-3 flex items-center justify-between shrink-0 border-b border-border">
           <div className="flex items-center gap-3 min-w-0 flex-1 md:flex-initial">
             <div className="flex items-center gap-2 mr-2 md:mr-6 min-w-0">
-              <Link
-                to="/"
+              <button
+                type="button"
+                onClick={() => (location.pathname.startsWith('/video/') ? (window.location.href = '/') : navigate('/'))}
                 className="font-brand text-text-primary hover:opacity-80 transition-opacity cursor-pointer shrink-0 text-left bg-transparent border-0 p-0 no-underline block"
                 aria-label="Go to Overview"
               >
                 <h1 className="text-base md:text-h5 font-medium truncate">Multi-Source Legal Evidence Investigator</h1>
-              </Link>
+              </button>
               <span className="hidden sm:inline-flex items-center px-2 py-1 rounded-sm border border-border bg-transparent text-text-secondary text-xs font-medium shrink-0 uppercase tracking-wide pointer-events-none select-none">
                 SAMPLE APP
               </span>
@@ -132,9 +147,9 @@ function Shell() {
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        <main className="flex-1 overflow-auto min-w-0" key={location.pathname}>
-          <Routes location={location}>
-            <Route path="/" element={<OverviewPage />} />
+        <main className="flex-1 overflow-auto min-w-0">
+          {/* Key by pathname so Routes remount when location updates (workaround for RR v7 transition delay) */}
+          <Routes key={location.pathname} location={location}>
             <Route
               path="/dashboard"
               element={
@@ -146,6 +161,7 @@ function Shell() {
             <Route path="/entities" element={<EntitiesPage />} />
             <Route path="/chat" element={<Chatbot />} />
             <Route path="/video/:videoId" element={<VideoAnalysis />} />
+            <Route path="/" element={<OverviewPage />} />
           </Routes>
         </main>
       </div>
