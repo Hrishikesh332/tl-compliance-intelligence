@@ -8,6 +8,8 @@ const CACHE_STALE_MS = 60_000
 export type CachedVideo = {
   id: string
   stream_url?: string
+  thumbnail_url?: string
+  duration_seconds?: number
   metadata: Record<string, any>
 }
 
@@ -32,7 +34,12 @@ function loadFromStorage(): CachedVideo[] {
 
 function saveToStorage(videos: CachedVideo[]) {
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify(videos))
+    const lite = videos.map((v) => ({
+      id: v.id,
+      duration_seconds: v.duration_seconds,
+      metadata: v.metadata,
+    }))
+    localStorage.setItem(CACHE_KEY, JSON.stringify(lite))
   } catch { /* ignore */ }
 }
 
@@ -58,6 +65,8 @@ export function VideoCacheProvider({ children }: { children: ReactNode }) {
       const list: CachedVideo[] = (data.videos || []).map((v: any) => ({
         id: v.id,
         stream_url: v.stream_url || undefined,
+        thumbnail_url: v.thumbnail_url || undefined,
+        duration_seconds: v.duration_seconds ?? undefined,
         metadata: v.metadata || {},
       }))
       if (mountedRef.current) {

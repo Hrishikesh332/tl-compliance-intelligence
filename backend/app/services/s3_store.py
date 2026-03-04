@@ -33,6 +33,13 @@ def upload_video(file_bytes: bytes, filename: str) -> dict:
     }
 
 
+def upload_thumbnail(video_id: str, thumb_bytes: bytes) -> str:
+    key = f"thumbnails/{video_id}.jpg"
+    _s3().put_object(Bucket=S3_BUCKET, Key=key, Body=thumb_bytes, ContentType="image/jpeg",
+                     CacheControl="public, max-age=31536000, immutable")
+    return key
+
+
 def upload_entity_image(file_bytes: bytes, entity_id: str) -> dict:
     key = f"entities/{entity_id}/face.png"
     _s3().put_object(Bucket=S3_BUCKET, Key=key, Body=file_bytes, ContentType="image/png")

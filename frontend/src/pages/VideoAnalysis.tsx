@@ -1270,6 +1270,30 @@ export default function VideoAnalysis() {
                 Get a structured report with description, categories, topics, risks, people, detected objects, and transcript.
               </p>
 
+              {/* Analyzing in progress — Strand-style loader card */}
+              {(analysisStep === 1 || analysisStep === 2) && (
+                <div
+                  className="mb-6 rounded-xl border-2 border-[var(--strand-ui-accent)] bg-[var(--strand-ui-accent-light)] px-5 py-4 flex items-center gap-4 shadow-sm"
+                  role="status"
+                  aria-live="polite"
+                  aria-label={analysisStep === 1 ? 'Analyzing video content' : 'Detecting people and objects'}
+                >
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand-charcoal text-brand-white">
+                    <img src={spinnerIconUrl} alt="" className="w-6 h-6 animate-spin opacity-90 invert" aria-hidden />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="font-brand text-base font-semibold text-text-primary">
+                      {analysisStep === 1 ? 'Analyzing video content…' : 'Detecting people and objects…'}
+                    </p>
+                    <p className="text-sm text-text-secondary mt-0.5">
+                      {analysisStep === 1
+                        ? 'Generating description, categories, risks, and transcript. This may take 1–2 minutes.'
+                        : 'Finding faces and objects in the video. Almost done.'}
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* Primary CTA — prominent placement so user focuses on it first */}
               <div className="mb-8">
                 <button
@@ -1280,7 +1304,7 @@ export default function VideoAnalysis() {
                 >
                   {analysisStep !== 0 ? (
                     <>
-                      <img src={spinnerIconUrl} alt="" className="w-4 h-4 animate-spin opacity-90" aria-hidden />
+                      <img src={spinnerIconUrl} alt="" className="w-4 h-4 animate-spin opacity-90 invert" aria-hidden />
                       {analysisStep === 1 ? 'Analyzing…' : 'Detecting…'}
                     </>
                   ) : (
@@ -1785,37 +1809,37 @@ export default function VideoAnalysis() {
             }
 
             return (
-              <div className="rounded-xl overflow-hidden shadow-sm border border-gray-200 shrink-0">
-                {/* Dark header */}
-                <div className="bg-brand-charcoal px-4 py-3.5">
+              <div className="rounded-xl overflow-hidden border border-border bg-surface shadow-sm shrink-0">
+                {/* Header — Strand: search product tint, typography */}
+                <div className="px-4 py-3.5 bg-[var(--strand-product-search-light)] border-b border-border">
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-8 h-8 rounded-lg bg-white/[0.08] flex items-center justify-center shrink-0">
-                        <svg className="w-4 h-4 text-gray-300" viewBox="0 0 16 16" fill="none" aria-hidden>
+                      <div className="w-9 h-9 rounded-lg bg-[var(--strand-product-search)]/20 flex items-center justify-center shrink-0 border border-[var(--strand-product-search)]/30">
+                        <svg className="w-4 h-4 text-[var(--strand-product-search-dark)]" viewBox="0 0 16 16" fill="none" aria-hidden>
                           <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5"/>
                           <line x1="11" y1="11" x2="14" y2="14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
                         </svg>
                       </div>
                       <div className="min-w-0">
-                        <p className="text-[13px] font-semibold text-white leading-tight truncate">
+                        <p className="font-brand text-sm font-semibold text-text-primary leading-tight truncate">
                           &ldquo;{searchQuery}&rdquo;
                         </p>
-                        <p className="text-[11px] text-gray-400 mt-0.5">
+                        <p className="text-xs text-text-secondary mt-0.5">
                           {searchClips.length} clip{searchClips.length !== 1 ? 's' : ''} found
                         </p>
                       </div>
                     </div>
                     {rel.label && (
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold shrink-0 ${
-                        rel.label === 'Highest' ? 'bg-emerald-500/15 text-emerald-400' :
-                        rel.label === 'High' ? 'bg-green-500/15 text-green-400' :
-                        rel.label === 'Medium' ? 'bg-amber-500/15 text-amber-400' :
-                        'bg-red-500/15 text-red-400'
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold shrink-0 border ${
+                        rel.label === 'Highest' ? 'bg-emerald-500/15 text-emerald-700 border-emerald-200' :
+                        rel.label === 'High' ? 'bg-green-500/15 text-green-700 border-green-200' :
+                        rel.label === 'Medium' ? 'bg-amber-500/15 text-amber-700 border-amber-200' :
+                        'bg-red-500/15 text-red-700 border-red-200'
                       }`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${
-                          rel.label === 'Highest' ? 'bg-emerald-400' :
-                          rel.label === 'High' ? 'bg-green-400' :
-                          rel.label === 'Medium' ? 'bg-amber-400' : 'bg-red-400'
+                          rel.label === 'Highest' ? 'bg-emerald-500' :
+                          rel.label === 'High' ? 'bg-green-500' :
+                          rel.label === 'Medium' ? 'bg-amber-500' : 'bg-red-500'
                         }`} />
                         {rel.label}
                       </span>
@@ -1823,8 +1847,8 @@ export default function VideoAnalysis() {
                   </div>
                 </div>
 
-                {/* Clip results — thumbnail showcase */}
-                <div className="bg-surface divide-y divide-gray-100 max-h-[280px] overflow-y-auto">
+                {/* Clip results — Strand card list: border-border, hover:bg-card, active accent */}
+                <div className="divide-y divide-border bg-background max-h-[280px] overflow-y-auto">
                   {searchClips.map((clip, i) => {
                     const isActive = activeClipIdx === i
                     const barPct = maxScore > 0 ? (clip.score / maxScore) * 100 : 0
@@ -1837,56 +1861,62 @@ export default function VideoAnalysis() {
                           playerRef.current?.seekTo(clip.start)
                           setActiveClipIdx(i)
                         }}
-                        className={`w-full flex items-center gap-3 px-4 py-3 transition-all duration-150 group text-left ${
+                        className={`w-full flex items-center gap-3 px-4 py-3 transition-all duration-150 group text-left border-l-[3px] ${
                           isActive
-                            ? 'bg-accent/[0.06] border-l-[3px] border-l-accent'
-                            : 'border-l-[3px] border-l-transparent hover:bg-gray-50'
+                            ? 'bg-[var(--strand-ui-accent-light)] border-l-[var(--strand-ui-accent)]'
+                            : 'border-l-transparent hover:bg-card border-border/50'
                         }`}
                       >
-                        {/* Clip thumbnail */}
-                        <div className={`w-14 h-10 rounded-md overflow-hidden shrink-0 bg-gray-200 flex items-center justify-center border transition-all duration-150 ${
-                          isActive ? 'ring-2 ring-accent border-accent' : 'border-gray-200 group-hover:border-gray-300'
+                        {/* Thumbnail — Strand: rounded-lg, border-border, ring on active */}
+                        <div className={`w-14 h-10 rounded-lg overflow-hidden shrink-0 bg-card flex items-center justify-center border transition-all duration-150 ${
+                          isActive ? 'ring-2 ring-[var(--strand-ui-accent)] border-[var(--strand-ui-accent)]' : 'border-border group-hover:border-[var(--strand-gray-400)]'
                         }`}>
-                          {clipThumbnails[i] ? (
+                          {videoId ? (
                             <img
-                              src={clipThumbnails[i]}
+                              src={`${API_BASE}/api/videos/${encodeURIComponent(videoId)}/frame?t=${clip.start}`}
                               alt=""
                               className="w-full h-full object-cover"
+                              loading="lazy"
+                              onError={(e) => {
+                                const el = e.currentTarget
+                                el.style.display = 'none'
+                                const fallback = el.nextElementSibling as HTMLElement
+                                if (fallback) fallback.style.display = 'flex'
+                              }}
                             />
-                          ) : (
-                            <svg className="w-5 h-5 text-gray-400" viewBox="0 0 12 12" fill="currentColor" aria-hidden>
+                          ) : null}
+                          <span className="w-full h-full items-center justify-center text-text-tertiary" style={{ display: videoId ? 'none' : 'flex' }}>
+                            <svg className="w-5 h-5" viewBox="0 0 12 12" fill="currentColor" aria-hidden>
                               <path d="M3 1.5v9l7.5-4.5L3 1.5z" />
                             </svg>
-                          )}
+                          </span>
                         </div>
 
-                        {/* Rank + time */}
+                        {/* Rank + time — Strand typography */}
                         <div className="flex-1 min-w-0 flex items-baseline gap-2">
-                          <span className={`text-[11px] font-bold tabular-nums shrink-0 ${
-                            isActive ? 'text-accent' : 'text-gray-400'
+                          <span className={`text-xs font-semibold tabular-nums shrink-0 ${
+                            isActive ? 'text-[var(--strand-ui-accent-hover)]' : 'text-text-tertiary'
                           }`}>
                             {i + 1}
                           </span>
-                          <span className={`text-sm font-semibold tabular-nums ${
-                            isActive ? 'text-accent' : 'text-gray-800'
-                          }`}>
-                            {fmtSec(clip.start)}<span className="text-gray-400 mx-1">–</span>{fmtSec(clip.end)}
+                          <span className="font-brand text-sm font-semibold tabular-nums text-text-primary">
+                            {fmtSec(clip.start)}<span className="text-text-tertiary mx-1">–</span>{fmtSec(clip.end)}
                           </span>
-                          <span className="text-[10px] font-medium uppercase tracking-wider text-gray-400 shrink-0">
+                          <span className="text-[10px] font-medium uppercase tracking-wider text-text-tertiary shrink-0">
                             {clip.type}
                           </span>
                         </div>
 
-                        {/* Score bar + percentage */}
+                        {/* Score bar + percentage — Strand card-style track */}
                         <div className="w-[88px] shrink-0 flex items-center gap-2">
-                          <div className="flex-1 h-[5px] rounded-full bg-gray-100 overflow-hidden">
+                          <div className="flex-1 h-[5px] rounded-full bg-card overflow-hidden border border-border/50">
                             <div
                               className={`h-full rounded-full transition-all duration-300 ${scoreBarColor(clip.score)}`}
                               style={{ width: `${barPct}%` }}
                             />
                           </div>
-                          <span className={`text-[11px] font-bold tabular-nums w-[38px] text-right ${
-                            isActive ? 'text-accent' : clipScoreColor(clip.score)
+                          <span className={`text-xs font-semibold tabular-nums w-[38px] text-right ${
+                            isActive ? 'text-[var(--strand-ui-accent-hover)]' : clipScoreColor(clip.score)
                           }`}>
                             {(clip.score * 100).toFixed(1)}%
                           </span>
@@ -1896,13 +1926,13 @@ export default function VideoAnalysis() {
                   })}
                 </div>
 
-                {/* Timeline bar */}
+                {/* Timeline — Strand: bg-card, border-border, text-text-secondary */}
                 {timelineEnd > 0 && (
-                  <div className="px-4 py-3 bg-gray-50/80 border-t border-gray-100">
-                    <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-2">
+                  <div className="px-4 py-3 bg-card border-t border-border">
+                    <p className="text-[10px] font-semibold text-text-tertiary uppercase tracking-wider mb-2">
                       Clip positions
                     </p>
-                    <div className="relative h-[6px] rounded-full bg-gray-200 overflow-visible">
+                    <div className="relative h-[6px] rounded-full bg-[var(--strand-gray-200)] overflow-visible border border-border/50">
                       {searchClips.map((clip, i) => {
                         const leftPct = (clip.start / timelineEnd) * 100
                         const widthPct = Math.max(((clip.end - clip.start) / timelineEnd) * 100, 1.2)
@@ -1916,7 +1946,7 @@ export default function VideoAnalysis() {
                               setActiveClipIdx(i)
                             }}
                             className={`absolute top-0 h-full rounded-sm cursor-pointer transition-all duration-150 ${
-                              isActive2 ? 'ring-2 ring-accent/40 scale-y-[1.6] z-10' : 'hover:scale-y-[1.4] z-0'
+                              isActive2 ? 'ring-2 ring-[var(--strand-ui-accent)]/50 scale-y-[1.6] z-10' : 'hover:scale-y-[1.4] z-0'
                             } ${scoreBarColor(clip.score)}`}
                             style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
                             title={`${fmtSec(clip.start)} – ${fmtSec(clip.end)}`}
@@ -1925,8 +1955,8 @@ export default function VideoAnalysis() {
                       })}
                     </div>
                     <div className="flex justify-between mt-1.5">
-                      <span className="text-[10px] text-gray-400 tabular-nums">0:00</span>
-                      <span className="text-[10px] text-gray-400 tabular-nums">{fmtSec(timelineEnd)}</span>
+                      <span className="text-[10px] text-text-tertiary tabular-nums">0:00</span>
+                      <span className="text-[10px] text-text-tertiary tabular-nums">{fmtSec(timelineEnd)}</span>
                     </div>
                   </div>
                 )}

@@ -5,7 +5,8 @@ import time as _time
 from flask import Blueprint, Response, jsonify, request
 
 from app.services.bedrock_marengo import get_async_invocation, load_video_embeddings_from_s3
-from app.services.s3_store import upload_video, get_presigned_url, S3_EMBEDDINGS_OUTPUT
+from concurrent.futures import ThreadPoolExecutor
+from app.services.s3_store import upload_video, upload_thumbnail, get_presigned_url, S3_EMBEDDINGS_OUTPUT
 from app.services.vector_store import FIXED_INDEX_ID, add as index_add, get_entry as index_get_entry, _save as vs_save, _index as vs_index
 
 from app.utils.faces import detect_and_crop_faces, deduplicate_faces, embed_face_crop
@@ -15,6 +16,7 @@ from app.utils.video_helpers import (
     video_id_to_s3_uri,
     video_id_to_presigned_url,
     get_frame_bytes,
+    extract_duration_and_thumbnail,
     is_frame_blurred,
     get_object_bbox_from_frame,
     get_video_list_cache,
@@ -55,13 +57,26 @@ def api_upload_video():
         return jsonify({"error": "File exceeds 300 MB limit"}), 400
     tags_raw = request.form.get("tags", "").strip()
     tags = [t.strip() for t in tags_raw.split(",") if t.strip()]
+
+    duration_seconds, thumb_bytes = extract_duration_and_thumbnail(video_bytes)
+    log.info("Pre-upload probe: duration=%.1fs thumb=%s", duration_seconds or 0, "yes" if thumb_bytes else "no")
+
     try:
         info = upload_video(video_bytes, file.filename)
         log.info("S3 upload OK: video_id=%s s3_uri=%s", info["video_id"], info["s3_uri"])
     except Exception as e:
         log.error("S3 upload FAILED for %s: %s", file.filename, e, exc_info=True)
         return jsonify({"error": str(e)}), 500
+
     task_id = info["video_id"]
+    thumbnail_s3_key = None
+    if thumb_bytes:
+        try:
+            thumbnail_s3_key = upload_thumbnail(task_id, thumb_bytes)
+            log.info("Thumbnail uploaded: %s", thumbnail_s3_key)
+        except Exception as e:
+            log.warning("Thumbnail upload failed (non-fatal): %s", e)
+
     tasks = get_tasks()
     try:
         output_uri = f"{S3_EMBEDDINGS_OUTPUT}/{task_id}"
@@ -85,6 +100,10 @@ def api_upload_video():
             "uploaded_at": info["uploaded_at"],
             "status": "indexing",
         }
+        if duration_seconds is not None:
+            meta["duration_seconds"] = duration_seconds
+        if thumbnail_s3_key:
+            meta["thumbnail_s3_key"] = thumbnail_s3_key
         if tags:
             meta["tags"] = tags
         index_add(id=task_id, embedding=[0.0] * 512, metadata=meta, type="video")
@@ -170,13 +189,26 @@ def api_list_videos():
     if cache and (now - cache_ts) < ttl:
         return jsonify(cache)
     entries = index_list(type_filter="video")
-    for entry in entries:
-        s3_key = entry.get("metadata", {}).get("s3_key")
+
+    def _resolve_urls(entry: dict) -> None:
+        meta = entry.get("metadata") or {}
+        s3_key = meta.get("s3_key")
         if s3_key:
             try:
                 entry["stream_url"] = get_presigned_url(s3_key)
             except Exception:
                 entry["stream_url"] = None
+        thumb_key = meta.get("thumbnail_s3_key")
+        if thumb_key:
+            try:
+                entry["thumbnail_url"] = get_presigned_url(thumb_key)
+            except Exception:
+                entry["thumbnail_url"] = None
+        entry["duration_seconds"] = meta.get("duration_seconds")
+
+    with ThreadPoolExecutor(max_workers=min(len(entries), 10)) as pool:
+        list(pool.map(_resolve_urls, entries))
+
     result = {"indexId": FIXED_INDEX_ID, "count": len(entries), "videos": entries}
     set_video_list_cache(result)
     return jsonify(result)

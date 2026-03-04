@@ -4,6 +4,7 @@ import AddImageModal from '../components/AddImageModal'
 import AddEntityModal, { type EntitySelection } from '../components/AddEntityModal'
 import { useVideoCache, type CachedVideo } from '../contexts/VideoCache'
 import searchIconUrl from '../../strand/icons/search.svg?url'
+import spinnerIconUrl from '../../strand/icons/spinner.svg?url'
 import arrowBoxUpIconUrl from '../../strand/icons/arrow-box-up.svg?url'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
@@ -269,6 +270,8 @@ type VideoItem = {
   tags?: string[]
   entities?: TableEntity[]
   streamUrl?: string
+  thumbnailUrl?: string
+  durationSeconds?: number
   clips?: ClipMatch[]
   searchScore?: number
 }
@@ -308,7 +311,7 @@ const TOTAL_HOURS = 10
 
 function formatTotalDuration(videos: VideoItem[], videoDurations?: Record<string, number>) {
   const totalSeconds = videos.reduce((sum, v) => {
-    const sec = videoDurations?.[v.id]
+    const sec = v.durationSeconds ?? videoDurations?.[v.id]
     if (sec != null && Number.isFinite(sec)) return sum + sec
     return sum + v.totalMinutes * 60
   }, 0)
@@ -319,7 +322,6 @@ function formatTotalDuration(videos: VideoItem[], videoDurations?: Record<string
   return `${m} min`
 }
 
-/** Format as mm:ss for thumbnail badge (hours omitted). */
 function formatDurationHHMMSS(duration: string): string {
   const parts = duration.split(':').map(Number)
   if (parts.length >= 3) {
@@ -504,12 +506,13 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
           uploadDate = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}-${d.getFullYear()}`
         } catch { uploadDate = uploaded }
       }
+      const dur = v.duration_seconds
       return {
         id: v.id,
         title: meta.filename || v.id,
         uploadDate,
-        duration: '—',
-        totalMinutes: 0,
+        duration: dur != null ? formatSecondsToTimestamp(dur) : '—',
+        totalMinutes: dur != null ? Math.ceil(dur / 60) : 0,
         category: 'Uploaded',
         tags: [
           ...(Array.isArray(meta.tags) ? meta.tags : []),
@@ -517,27 +520,47 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
         ],
         entities: [],
         streamUrl: v.stream_url || undefined,
+        thumbnailUrl: v.thumbnail_url || undefined,
+        durationSeconds: dur ?? undefined,
       }
     })
   }, [cachedVideos])
 
+  // For videos without duration in metadata, get duration from the video element (onLoadedMetadata)
   const [videoDurations, setVideoDurations] = useState<Record<string, number>>({})
-  const [videoLoadFailed, setVideoLoadFailed] = useState<Record<string, boolean>>({})
-  const [videoLoaded, setVideoLoaded] = useState<Record<string, boolean>>({})
-  const videoLoadedRef = useRef<Record<string, boolean>>({})
-  videoLoadedRef.current = videoLoaded
+
   const SEARCH_PLACEHOLDERS = [
     'Search actions, objects, sounds and logos',
     "Search with entities (@ + name)",
     'Search with image and text across videos',
   ]
+
+  /** Predefined queries users can run — aligned with legal evidence & compliance use cases */
+  const SUGGESTED_SEARCHES = [
+    'person entering or leaving the building',
+    'vehicle stopping, collision, or crash',
+    'two people talking or in conversation',
+    'person running or moving quickly',
+    'object or hazard on the ground',
+    'car or truck in the parking lot',
+    'safety vest, helmet, or PPE',
+    'emergency exit or evacuation',
+  ]
   const [placeholderIdx, setPlaceholderIdx] = useState(0)
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false)
   useEffect(() => {
     if (searchQuery || searchAttachments.length) return
     const timer = setInterval(() => {
       setPlaceholderIdx((i) => (i + 1) % SEARCH_PLACEHOLDERS.length)
     }, 6000)
     return () => clearInterval(timer)
+  }, [searchQuery, searchAttachments.length])
+
+  // Close suggestions dropdown when user starts typing or attaches filters
+  useEffect(() => {
+    if (searchQuery || searchAttachments.length) {
+      setSuggestionsOpen(false)
+    }
   }, [searchQuery, searchAttachments.length])
 
   const [searchOptions, setSearchOptions] = useState<SearchOptions>({
@@ -653,8 +676,8 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
     return list
   }, [allFolders, activeCategory])
 
-  async function handleSearch() {
-    const query = searchQuery.trim()
+  async function handleSearch(overrideQuery?: string) {
+    const query = (overrideQuery ?? searchQuery).trim()
     const entityIds = searchAttachments.filter((a) => a.type === 'entity').map((a) => a.id)
     const hasQuery = query.length > 0
     const hasEntities = entityIds.length > 0
@@ -689,12 +712,13 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
             uploadDate = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}-${d.getFullYear()}`
           }
         } catch { uploadDate = meta.uploaded_at || '' }
+        const dur = r.duration_seconds ?? meta.duration_seconds
         return {
           id: r.id,
           title: meta.filename || r.id,
           uploadDate,
-          duration: '—',
-          totalMinutes: 0,
+          duration: dur != null ? formatSecondsToTimestamp(dur) : '—',
+          totalMinutes: dur != null ? Math.ceil(dur / 60) : 0,
           category: 'Uploaded',
           tags: [
             ...(Array.isArray(meta.tags) ? meta.tags : []),
@@ -702,6 +726,8 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
           ],
           entities: [],
           streamUrl: r.stream_url || undefined,
+          thumbnailUrl: r.thumbnail_url || undefined,
+          durationSeconds: dur ?? undefined,
           clips: Array.isArray(r.clips) ? r.clips : [],
           searchScore: r.score,
         }
@@ -865,56 +891,108 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
               </div>
             </div>
           </div>
-          <div className="px-3 sm:px-4 pb-4 flex flex-wrap items-center justify-between gap-2 w-full">
-            <div className="flex flex-wrap items-center gap-2 min-w-0">
+          <div className="px-3 sm:px-4 pb-3 space-y-2 w-full">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
+                <button
+                  type="button"
+                  onClick={() => setAddImageModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border bg-surface text-sm text-text-secondary hover:bg-card transition-colors"
+                >
+                  <IconAddImage className="w-4 h-4 shrink-0" />
+                  <span className="hidden sm:inline">Add Image</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAddEntityModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border bg-surface text-sm text-text-secondary hover:bg-card transition-colors"
+                >
+                  <IconEntity className="w-3.5 h-3.5 shrink-0" />
+                  <span className="hidden sm:inline">Add Entity</span>
+                  <span className="hidden sm:inline text-[10px] font-medium bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">BETA</span>
+                </button>
+                {!searchQuery && !searchAttachments.length && (
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setSuggestionsOpen((open) => !open)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border bg-card/70 text-[11px] text-text-secondary hover:bg-card transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--strand-ui-accent)]/40 focus:ring-offset-1"
+                    >
+                      <span className="uppercase tracking-wider font-semibold">Suggestions</span>
+                      <svg
+                        className={`w-3 h-3 transition-transform ${suggestionsOpen ? 'rotate-180' : ''}`}
+                        viewBox="0 0 12 12"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                        aria-hidden
+                      >
+                        <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                    {suggestionsOpen && !searchLoading && (
+                      <div className="absolute left-0 mt-1 z-[60] w-72 max-w-[calc(100vw-3rem)] rounded-xl border border-border bg-surface shadow-lg py-2">
+                        <p className="px-3 pb-1 text-[11px] font-medium text-text-tertiary uppercase tracking-wider">
+                          Try searching for
+                        </p>
+                        <ul className="max-h-56 overflow-auto">
+                          {SUGGESTED_SEARCHES.map((suggested) => (
+                            <li key={suggested}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSearchQuery(suggested)
+                                  setSuggestionsOpen(false)
+                                  handleSearch(suggested)
+                                }}
+                                className="w-full text-left px-3 py-1.5 text-xs text-text-primary hover:bg-card transition-colors"
+                              >
+                                {suggested}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
               <button
                 type="button"
-                onClick={() => setAddImageModalOpen(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border bg-surface text-sm text-text-secondary hover:bg-card transition-colors"
+                disabled={(!searchQuery.trim() && !searchAttachments.some((a) => a.type === 'entity')) || searchLoading}
+                onClick={() => handleSearch()}
+                className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors shrink-0 ${
+                  (searchQuery.trim() || searchAttachments.some((a) => a.type === 'entity')) && !searchLoading
+                    ? 'bg-brand-charcoal text-brand-white hover:bg-gray-600 cursor-pointer'
+                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                }`}
+                aria-label="Search"
               >
-                <IconAddImage className="w-4 h-4 shrink-0" />
-                <span className="hidden sm:inline">Add Image</span>
+                {searchLoading ? (
+                  <img src={spinnerIconUrl} alt="" className="w-5 h-5 animate-spin opacity-90" aria-hidden />
+                ) : (
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="7" />
+                    <line x1="16.65" y1="16.65" x2="21" y2="21" />
+                  </svg>
+                )}
               </button>
-              <button
-                type="button"
-                onClick={() => setAddEntityModalOpen(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border bg-surface text-sm text-text-secondary hover:bg-card transition-colors"
-              >
-                <IconEntity className="w-3.5 h-3.5 shrink-0" />
-                <span className="hidden sm:inline">Add Entity</span>
-                <span className="hidden sm:inline text-[10px] font-medium bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">BETA</span>
-              </button>
-              {/* AdvancedParamsDropdown (Filter) commented out per request
-              <AdvancedParamsDropdown
-                options={searchOptions}
-                onChange={setSearchOptions}
-                onApply={() => {}}
-              />
-              */}
             </div>
-            <button
-              type="button"
-              disabled={(!searchQuery.trim() && !searchAttachments.some((a) => a.type === 'entity')) || searchLoading}
-              onClick={() => handleSearch()}
-              className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors shrink-0 ${
-                (searchQuery.trim() || searchAttachments.some((a) => a.type === 'entity')) && !searchLoading
-                  ? 'bg-brand-charcoal text-brand-white hover:bg-gray-600 cursor-pointer'
-                  : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-              }`}
-              aria-label="Search"
-            >
-              {searchLoading ? (
-                <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" aria-hidden />
-              ) : (
-                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="11" cy="11" r="7" />
-                  <line x1="16.65" y1="16.65" x2="21" y2="21" />
-                </svg>
-              )}
-            </button>
           </div>
         </div>
       </div>
+
+      {/* Search loading state — Strand-style loader */}
+      {searchLoading && (
+        <div className="mb-4 rounded-xl border border-border bg-surface px-4 py-3 flex items-center gap-3 shadow-sm" role="status" aria-live="polite">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--strand-product-search-light)] text-[var(--strand-product-search-dark)]">
+            <img src={spinnerIconUrl} alt="" className="w-5 h-5 animate-spin" aria-hidden />
+          </span>
+          <div>
+            <p className="text-sm font-medium text-text-primary">Searching across videos…</p>
+            <p className="text-xs text-text-secondary">This may take a few seconds.</p>
+          </div>
+        </div>
+      )}
 
       {/* Search result summary + error */}
       {searchError && (
@@ -923,7 +1001,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
         </p>
       )}
       {searchResults && (
-        <div className="flex flex-wrap items-center gap-2 mb-3">
+        <div className="flex flex-wrap items-center gap-3 mb-3">
           <span className="text-sm text-text-secondary">
             {searchResults.results.length === 0
               ? `No videos found for “${searchResults.query}”.`
@@ -932,7 +1010,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
           <button
             type="button"
             onClick={clearSearch}
-            className="text-sm font-medium text-brand-charcoal hover:underline focus:outline-none focus:ring-2 focus:ring-brand-charcoal/30 rounded"
+            className="inline-flex items-center gap-2 h-9 px-4 rounded-xl border border-border text-text-primary font-semibold text-sm hover:bg-card transition-colors focus:outline-none focus:ring-2 focus:ring-brand-charcoal/30 focus:ring-offset-1"
           >
             Clear search
           </button>
@@ -1072,41 +1150,47 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                   className="group block focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-xl min-w-0"
                 >
                   <div className="relative aspect-video rounded-xl overflow-hidden bg-brand-charcoal">
-                    {v.streamUrl ? (
-                      <>
-                        <div
-                          className={`absolute inset-0 flex items-center justify-center bg-brand-charcoal z-[1] transition-opacity duration-200 ${videoLoaded[v.id] && !videoLoadFailed[v.id] ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
-                          aria-hidden
-                        >
-                          <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center">
-                            <IconPlay className="w-5 h-5 text-white ml-0.5" />
-                          </div>
-                        </div>
-                        <video
-                          src={v.streamUrl}
-                          className={`absolute inset-0 w-full h-full object-cover brightness-105 z-0 transition-opacity duration-200 ${videoLoaded[v.id] ? 'opacity-100' : 'opacity-0'}`}
-                          muted
-                          loop
-                          playsInline
-                          preload="metadata"
-                          aria-label={v.title}
-                          data-video-id={v.id}
-                          onLoadedMetadata={(e) => {
-                            const el = e.currentTarget
-                            const id = el.dataset.videoId
-                            if (id && Number.isFinite(el.duration)) {
-                              setVideoDurations((prev) => (prev[id] === el.duration ? prev : { ...prev, [id]: el.duration }))
-                            }
-                          }}
-                          onLoadedData={(e) => {
-                            const id = (e.currentTarget as HTMLVideoElement).dataset.videoId
-                            if (id) setVideoLoaded((prev) => ({ ...prev, [id]: true }))
-                          }}
-                          onError={() => {
-                            setVideoLoadFailed((prev) => ({ ...prev, [v.id]: true }))
-                          }}
-                        />
-                      </>
+                    {v.thumbnailUrl ? (
+                      <img
+                        src={v.thumbnailUrl}
+                        alt={v.title}
+                        loading="lazy"
+                        decoding="async"
+                        className="absolute inset-0 w-full h-full object-cover brightness-105"
+                        onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+                      />
+                    ) : v.streamUrl ? (
+                      <video
+                        src={v.streamUrl}
+                        className="absolute inset-0 w-full h-full object-cover brightness-105"
+                        muted
+                        playsInline
+                        preload="metadata"
+                        aria-label={v.title}
+                        data-video-id={v.id}
+                        onLoadedMetadata={v.durationSeconds != null ? undefined : (e) => {
+                          const el = e.currentTarget
+                          const id = el.dataset.videoId
+                          if (id && Number.isFinite(el.duration)) {
+                            setVideoDurations((prev) => (prev[id] === el.duration ? prev : { ...prev, [id]: el.duration }))
+                          }
+                        }}
+                      />
+                    ) : null}
+                    {v.thumbnailUrl && v.durationSeconds == null && v.streamUrl ? (
+                      <video
+                        src={v.streamUrl}
+                        className="absolute w-0 h-0 opacity-0 pointer-events-none"
+                        preload="metadata"
+                        data-video-id={v.id}
+                        onLoadedMetadata={(e) => {
+                          const el = e.currentTarget
+                          const id = el.dataset.videoId
+                          if (id && Number.isFinite(el.duration)) {
+                            setVideoDurations((prev) => (prev[id] === el.duration ? prev : { ...prev, [id]: el.duration }))
+                          }
+                        }}
+                      />
                     ) : null}
                     <div className="absolute inset-0 flex items-center justify-center bg-transparent group-hover:bg-brand-charcoal/40 z-[2] pointer-events-none transition-colors duration-200">
                       <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200">
@@ -1122,14 +1206,14 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                       ) : null
                     })()}
                     <span className="absolute left-1/2 -translate-x-1/2 bottom-1.5 px-3 py-1 text-sm font-mono font-medium text-white rounded border border-white/90 tabular-nums bg-black/50 [text-shadow:0_0_2px_rgba(0,0,0,0.9)]">
-                      {videoDurations[v.id] != null ? formatSecondsToTimestamp(videoDurations[v.id]) : v.duration !== '—' ? formatDurationHHMMSS(v.duration) : '—'}
+                      {videoDurations[v.id] != null ? formatSecondsToTimestamp(videoDurations[v.id]) : v.duration}
                     </span>
                   </div>
                   <p className="mt-2.5 text-sm text-text-secondary truncate group-hover:text-text-primary transition-colors">
                     {v.title}
                   </p>
                   <p className="mt-0.5 text-sm text-text-tertiary tabular-nums">
-                    {videoDurations[v.id] != null ? formatSecondsToTimestamp(videoDurations[v.id]) : formatDurationShort(v.duration)}
+                    {videoDurations[v.id] != null ? formatDurationShort(formatSecondsToTimestamp(videoDurations[v.id])) : v.duration !== '—' ? formatDurationShort(v.duration) : '—'}
                   </p>
                 </Link>
               ))}
@@ -1219,13 +1303,13 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                         <div className="grid grid-cols-2 gap-1.5 w-full h-full">
                           {folderVideos.slice(0, 4).map((v) => (
                             <div key={v.id} className="rounded-md bg-brand-charcoal flex items-center justify-center overflow-hidden relative">
-                              {v.streamUrl ? (
-                                <video
-                                  src={v.streamUrl}
+                              {v.thumbnailUrl ? (
+                                <img
+                                  src={v.thumbnailUrl}
+                                  alt={v.title}
+                                  loading="lazy"
+                                  decoding="async"
                                   className="absolute inset-0 w-full h-full object-cover"
-                                  muted
-                                  playsInline
-                                  preload="metadata"
                                 />
                               ) : (
                                 <IconPlay className="w-3.5 h-3.5 text-white/40" />
@@ -1282,13 +1366,44 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                     className="group block focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-xl min-w-0"
                   >
                     <div className="relative aspect-video rounded-xl overflow-hidden bg-brand-charcoal">
-                      {v.streamUrl ? (
+                      {v.thumbnailUrl ? (
+                        <img
+                          src={v.thumbnailUrl}
+                          alt={v.title}
+                          loading="lazy"
+                          decoding="async"
+                          className="absolute inset-0 w-full h-full object-cover brightness-105"
+                        />
+                      ) : v.streamUrl ? (
                         <video
                           src={v.streamUrl}
                           className="absolute inset-0 w-full h-full object-cover brightness-105"
                           muted
                           playsInline
                           preload="metadata"
+                          data-video-id={v.id}
+                          onLoadedMetadata={v.durationSeconds != null ? undefined : (e) => {
+                            const el = e.currentTarget
+                            const id = el.dataset.videoId
+                            if (id && Number.isFinite(el.duration)) {
+                              setVideoDurations((prev) => (prev[id] === el.duration ? prev : { ...prev, [id]: el.duration }))
+                            }
+                          }}
+                        />
+                      ) : null}
+                      {v.thumbnailUrl && v.durationSeconds == null && v.streamUrl ? (
+                        <video
+                          src={v.streamUrl}
+                          className="absolute w-0 h-0 opacity-0 pointer-events-none"
+                          preload="metadata"
+                          data-video-id={v.id}
+                          onLoadedMetadata={(e) => {
+                            const el = e.currentTarget
+                            const id = el.dataset.videoId
+                            if (id && Number.isFinite(el.duration)) {
+                              setVideoDurations((prev) => (prev[id] === el.duration ? prev : { ...prev, [id]: el.duration }))
+                            }
+                          }}
                         />
                       ) : null}
                       <div className="absolute inset-0 flex items-center justify-center bg-transparent group-hover:bg-brand-charcoal/40 z-[2] pointer-events-none transition-colors duration-200">
@@ -1297,14 +1412,14 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                         </div>
                       </div>
                       <span className="absolute left-1/2 -translate-x-1/2 bottom-1.5 px-3 py-1 text-sm font-mono font-medium text-white rounded border border-white/90 tabular-nums bg-black/50 [text-shadow:0_0_2px_rgba(0,0,0,0.9)]">
-                        {videoDurations[v.id] != null ? formatSecondsToTimestamp(videoDurations[v.id]) : v.duration !== '—' ? formatDurationHHMMSS(v.duration) : '—'}
+                        {videoDurations[v.id] != null ? formatSecondsToTimestamp(videoDurations[v.id]) : v.duration}
                       </span>
                     </div>
                     <p className="mt-2.5 text-sm text-text-secondary truncate group-hover:text-text-primary transition-colors">
                       {v.title}
                     </p>
                     <p className="mt-0.5 text-sm text-text-tertiary tabular-nums">
-                      {videoDurations[v.id] != null ? formatSecondsToTimestamp(videoDurations[v.id]) : formatDurationShort(v.duration)}
+                      {videoDurations[v.id] != null ? formatDurationShort(formatSecondsToTimestamp(videoDurations[v.id])) : v.duration !== '—' ? formatDurationShort(v.duration) : '—'}
                     </p>
                   </Link>
                 ))}

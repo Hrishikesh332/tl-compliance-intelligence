@@ -11,8 +11,8 @@ import { VideoCacheProvider } from './contexts/VideoCache'
 import logoMarkUrl from '../strand/assets/logo-mark.svg?url'
 
 const navItems = [
-  { to: '/', label: 'Overview' },
   { to: '/dashboard', label: 'Dashboard' },
+  { to: '/', label: 'Overview' },
   { to: '/entities', label: 'Entities' },
   { to: '/chat', label: 'Chat' },
 ]

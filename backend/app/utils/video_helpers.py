@@ -325,6 +325,47 @@ def video_id_to_presigned_url(video_id: str) -> str | None:
         return None
 
 
+def extract_duration_and_thumbnail(video_bytes: bytes) -> tuple[float | None, bytes | None]:
+    """Extract duration (seconds) and a mid-point thumbnail JPEG from raw video bytes in one FFprobe+FFmpeg pass."""
+    import tempfile
+    duration = None
+    thumb = None
+    tmp_path = None
+    try:
+        fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
+        os.write(fd, video_bytes)
+        os.close(fd)
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", tmp_path],
+            capture_output=True, timeout=15, check=False,
+        )
+        if probe.returncode == 0 and probe.stdout.strip():
+            try:
+                duration = float(probe.stdout.strip())
+            except ValueError:
+                pass
+        seek_t = (duration / 2) if duration and duration > 2 else 0
+        thumb_result = subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-ss", str(seek_t),
+             "-i", tmp_path, "-vframes", "1",
+             "-vf", "scale=480:-2", "-q:v", "5",
+             "-f", "image2", "pipe:1"],
+            capture_output=True, timeout=15, check=False,
+        )
+        if thumb_result.returncode == 0 and thumb_result.stdout:
+            thumb = thumb_result.stdout
+    except Exception as e:
+        log.warning("extract_duration_and_thumbnail failed: %s", e)
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+    return duration, thumb
+
+
 def get_frame_bytes(video_id: str, t: float) -> bytes | None:
     url = video_id_to_presigned_url(video_id)
     if not url or t < 0:
