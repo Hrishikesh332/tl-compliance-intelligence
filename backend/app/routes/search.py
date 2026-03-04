@@ -1,3 +1,5 @@
+import logging
+
 from flask import Blueprint, jsonify, request
 
 from app.services.s3_store import get_presigned_url, S3_EMBEDDINGS_OUTPUT
@@ -7,8 +9,11 @@ from app.utils.video_helpers import (
     get_search_embedding_from_request,
     clip_search,
     best_clip_score,
+    face_match_score_in_video,
     ENTITY_CLIP_MIN_SCORE,
 )
+
+log = logging.getLogger("app.routes.search")
 
 search_bp = Blueprint("search", __name__)
 
@@ -17,7 +22,9 @@ search_bp = Blueprint("search", __name__)
 def api_search_videos():
     data = request.get_json(silent=True) or {}
     query_emb, display_query, is_entity_search, err = get_search_embedding_from_request(data, request)
+    log.info("[SEARCH] type=%s query=%r", "entity" if is_entity_search else "text", display_query or "(none)")
     if err or not query_emb:
+        log.warning("[SEARCH] Embedding error: %s", err)
         return jsonify({"error": err or "Could not get search embedding"}), 400
     default_top_k = 12 if is_entity_search else 24
     top_k = data.get("top_k") or request.args.get("top_k", type=int) or default_top_k
@@ -50,7 +57,40 @@ def api_search_videos():
                     continue
                 candidates.append({"id": rec["id"], "score": best_sc, "metadata": meta})
             candidates.sort(key=lambda x: -x["score"])
-            results = candidates[:top_k]
+            # Re-rank by face-only matching: extract faces from video frames and compare to entity
+            video_ids_to_rerank = [c["id"] for c in candidates[: max(top_k * 2, 20)]]
+            face_scores_and_clips: dict[str, tuple[float, list]] = {}
+            for vid in video_ids_to_rerank:
+                rec = next((r for r in candidates if r["id"] == vid), None)
+                if not rec:
+                    continue
+                output_uri = rec.get("metadata", {}).get("output_s3_uri") or f"{S3_EMBEDDINGS_OUTPUT}/{vid}"
+                try:
+                    face_score, face_clips = face_match_score_in_video(
+                        query_emb, vid, output_uri, max_frames=10
+                    )
+                    face_scores_and_clips[vid] = (face_score, face_clips)
+                except Exception:
+                    face_scores_and_clips[vid] = (rec["score"], [])
+            # Use face-match score when we have it; fall back to clip score
+            def entity_score(c):
+                vid = c["id"]
+                face_score, _ = face_scores_and_clips.get(vid, (0.0, []))
+                return face_score if face_score >= ENTITY_CLIP_MIN_SCORE else c["score"]
+            candidates_reranked = sorted(
+                [c for c in candidates if c["id"] in face_scores_and_clips],
+                key=lambda x: -entity_score(x),
+            )
+            # Include any remaining candidates that weren’t re-scored (by original score)
+            remaining = [c for c in candidates if c["id"] not in face_scores_and_clips]
+            results = candidates_reranked + remaining
+            results = results[:top_k]
+            # Attach face score and face-matched clips to each result for response
+            for c in results:
+                vid = c["id"]
+                face_score, face_clips = face_scores_and_clips.get(vid, (0.0, []))
+                c["score"] = face_score if face_score >= ENTITY_CLIP_MIN_SCORE else c["score"]
+                c["face_clips"] = face_clips if face_score >= ENTITY_CLIP_MIN_SCORE else []
         else:
             results = index_search(
                 query_emb,
@@ -70,18 +110,21 @@ def api_search_videos():
                 except Exception:
                     pass
             clips = []
-            output_uri = meta.get("output_s3_uri") or (f"{S3_EMBEDDINGS_OUTPUT}/{r['id']}" if r.get("id") else None)
-            if output_uri and meta.get("status") == "ready":
-                try:
-                    clips = clip_search(
-                        query_emb,
-                        output_uri,
-                        top_n=clips_per_video,
-                        min_score=clip_min_score,
-                        visual_only=is_entity_search,
-                    )
-                except Exception:
-                    pass
+            if is_entity_search and r.get("face_clips") is not None:
+                clips = r["face_clips"][:clips_per_video]
+            else:
+                output_uri = meta.get("output_s3_uri") or (f"{S3_EMBEDDINGS_OUTPUT}/{r['id']}" if r.get("id") else None)
+                if output_uri and meta.get("status") == "ready":
+                    try:
+                        clips = clip_search(
+                            query_emb,
+                            output_uri,
+                            top_n=clips_per_video,
+                            min_score=clip_min_score,
+                            visual_only=is_entity_search,
+                        )
+                    except Exception:
+                        pass
             out.append({
                 "id": r["id"],
                 "score": r["score"],
@@ -89,6 +132,7 @@ def api_search_videos():
                 "stream_url": stream_url,
                 "clips": clips,
             })
+        log.info("[SEARCH] Returning %d results for query=%r", len(out), display_query)
         return jsonify({
             "indexId": FIXED_INDEX_ID,
             "query": display_query,
@@ -96,6 +140,7 @@ def api_search_videos():
             "results": out,
         })
     except Exception as e:
+        log.error("[SEARCH] FAILED: %s", e, exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 

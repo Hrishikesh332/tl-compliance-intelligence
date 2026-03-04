@@ -1,3 +1,4 @@
+import logging
 import subprocess
 import time as _time
 
@@ -7,7 +8,7 @@ from app.services.bedrock_marengo import get_async_invocation, load_video_embedd
 from app.services.s3_store import upload_video, get_presigned_url, S3_EMBEDDINGS_OUTPUT
 from app.services.vector_store import FIXED_INDEX_ID, add as index_add, get_entry as index_get_entry, _save as vs_save, _index as vs_index
 
-from app.utils.faces import detect_and_crop_faces
+from app.utils.faces import detect_and_crop_faces, deduplicate_faces, embed_face_crop
 from app.utils.video_helpers import (
     get_tasks,
     invalidate_video_cache,
@@ -15,21 +16,24 @@ from app.utils.video_helpers import (
     video_id_to_presigned_url,
     get_frame_bytes,
     is_frame_blurred,
-    get_face_from_video_frames,
     get_object_bbox_from_frame,
     get_video_list_cache,
     set_video_list_cache,
     VIDEO_ANALYSIS_PROMPT,
     parse_video_analysis_response,
     normalize_video_analysis,
-    OBJECTS_PROMPT,
-    parse_objects_response,
-    is_crucial_object,
-    clip_search,
-    best_clip_score,
-    ENTITY_CLIP_MIN_SCORE,
+    TRANSCRIPT_PROMPT,
+    parse_transcript_response,
+    DETECT_PROMPT,
+    parse_detect_response,
+    save_face_to_disk,
+    load_face_from_disk,
+    save_object_frame_to_disk,
+    load_object_frame_from_disk,
 )
 from app.services.bedrock_pegasus import analyze_video as pegasus_analyze_video
+
+log = logging.getLogger("app.routes.videos")
 
 videos_bp = Blueprint("videos", __name__)
 
@@ -37,18 +41,25 @@ videos_bp = Blueprint("videos", __name__)
 @videos_bp.route("/upload", methods=["POST"])
 def api_upload_video():
     if "video" not in request.files:
+        log.warning("Upload rejected: no 'video' file in request")
         return jsonify({"error": "No 'video' file provided"}), 400
     file = request.files["video"]
     if not file.filename:
+        log.warning("Upload rejected: empty filename")
         return jsonify({"error": "Empty filename"}), 400
     video_bytes = file.read()
+    size_mb = len(video_bytes) / (1024 * 1024)
+    log.info("Upload started: filename=%s size=%.1fMB", file.filename, size_mb)
     if len(video_bytes) > 300 * 1024 * 1024:
+        log.warning("Upload rejected: file too large (%.1fMB)", size_mb)
         return jsonify({"error": "File exceeds 300 MB limit"}), 400
     tags_raw = request.form.get("tags", "").strip()
     tags = [t.strip() for t in tags_raw.split(",") if t.strip()]
     try:
         info = upload_video(video_bytes, file.filename)
+        log.info("S3 upload OK: video_id=%s s3_uri=%s", info["video_id"], info["s3_uri"])
     except Exception as e:
+        log.error("S3 upload FAILED for %s: %s", file.filename, e, exc_info=True)
         return jsonify({"error": str(e)}), 500
     task_id = info["video_id"]
     tasks = get_tasks()
@@ -56,6 +67,7 @@ def api_upload_video():
         output_uri = f"{S3_EMBEDDINGS_OUTPUT}/{task_id}"
         from app.services.bedrock_marengo import start_video_embedding
         result = start_video_embedding(info["s3_uri"], output_uri)
+        log.info("Embedding task started: video_id=%s arn=%s", task_id, result.get("invocation_arn", "")[:80])
         tasks[task_id] = {
             "task_id": task_id,
             "filename": file.filename,
@@ -77,6 +89,7 @@ def api_upload_video():
             meta["tags"] = tags
         index_add(id=task_id, embedding=[0.0] * 512, metadata=meta, type="video")
     except Exception as e:
+        log.error("Embedding start FAILED: video_id=%s error=%s", task_id, e, exc_info=True)
         tasks[task_id] = {
             "task_id": task_id,
             "filename": file.filename,
@@ -88,6 +101,7 @@ def api_upload_video():
         }
         return jsonify({"error": str(e), "video_id": task_id, "s3_uri": info["s3_uri"]}), 500
     invalidate_video_cache()
+    log.info("Upload complete: video_id=%s filename=%s", task_id, file.filename)
     return jsonify({
         "task_id": task_id,
         "filename": file.filename,
@@ -173,25 +187,41 @@ def api_generate_video_analysis(video_id: str):
     video_id = (video_id or "").strip()
     if not video_id:
         return jsonify({"error": "video_id is required"}), 400
+    log.info("[ANALYSIS] Starting analysis for video_id=%s", video_id)
     entry = index_get_entry(video_id)
     if not entry:
+        log.warning("[ANALYSIS] Video not found in index: video_id=%s", video_id)
         return jsonify({"error": "Video not found in index. Use a video ID from the videos list (e.g. from Uploads).", "video_id": video_id}), 404
     s3_uri = video_id_to_s3_uri(video_id)
     if not s3_uri:
+        log.warning("[ANALYSIS] No S3 location for video_id=%s", video_id)
         return jsonify({
             "error": "Video has no S3 location. Ensure the video was uploaded successfully and S3_BUCKET is set, or that the record has s3_uri/s3_key in metadata.",
             "video_id": video_id,
         }), 400
     try:
+        log.info("[ANALYSIS] Calling Pegasus for video_id=%s s3_uri=%s", video_id, s3_uri)
+        t0 = _time.perf_counter()
         raw_text = pegasus_analyze_video(s3_uri, VIDEO_ANALYSIS_PROMPT)
+        log.info("[ANALYSIS] Pegasus response received in %.1fs (len=%d)", _time.perf_counter() - t0, len(raw_text or ""))
         analysis_dict = parse_video_analysis_response(raw_text)
         if not analysis_dict:
+            log.error("[ANALYSIS] Failed to parse Pegasus response as JSON for video_id=%s", video_id)
             return jsonify({
                 "error": "Could not parse analysis response as JSON",
                 "video_id": video_id,
                 "raw_preview": (raw_text[:500] + "..." if len(raw_text) > 500 else raw_text),
             }), 422
         analysis = normalize_video_analysis(analysis_dict)
+        log.info(
+            "[ANALYSIS] Parsed OK: title=%r categories=%d topics=%d risks=%d transcript_segments=%d riskLevel=%s",
+            analysis.get("title", "?")[:60],
+            len(analysis.get("categories", [])),
+            len(analysis.get("topics", [])),
+            len(analysis.get("risks", [])),
+            len(analysis.get("transcript", [])),
+            analysis.get("riskLevel", "?"),
+        )
         idx = vs_index()
         for rec in idx:
             if rec.get("id") == video_id:
@@ -201,6 +231,61 @@ def api_generate_video_analysis(video_id: str):
         invalidate_video_cache()
         return jsonify({"video_id": video_id, "analysis": analysis})
     except Exception as e:
+        log.error("[ANALYSIS] FAILED for video_id=%s: %s", video_id, e, exc_info=True)
+        return jsonify({"error": str(e), "video_id": video_id}), 500
+
+
+@videos_bp.route("/<video_id>/transcript", methods=["GET", "POST"])
+def api_video_transcript(video_id: str):
+    """
+    GET: Return the stored transcript (from video_analysis) if present.
+    POST: Generate a complete, detailed transcript via Pegasus, save to video_analysis, and return it.
+    """
+    video_id = (video_id or "").strip()
+    if not video_id:
+        return jsonify({"error": "video_id is required"}), 400
+    entry = index_get_entry(video_id)
+    if not entry:
+        return jsonify({"error": "Video not found in index", "video_id": video_id}), 404
+    meta = entry.get("metadata") or {}
+    existing_analysis = meta.get("video_analysis") or {}
+    existing_transcript = existing_analysis.get("transcript") or []
+
+    if request.method == "GET":
+        if not existing_transcript:
+            return jsonify({"video_id": video_id, "transcript": None, "message": "No transcript yet. Use POST to generate."}), 200
+        return jsonify({"video_id": video_id, "transcript": existing_transcript, "count": len(existing_transcript)})
+
+    # POST: generate transcript
+    s3_uri = video_id_to_s3_uri(video_id)
+    if not s3_uri:
+        return jsonify({"error": "Video has no S3 location", "video_id": video_id}), 400
+    log.info("[TRANSCRIPT] Generating detailed transcript for video_id=%s", video_id)
+    try:
+        t0 = _time.perf_counter()
+        raw = pegasus_analyze_video(s3_uri, TRANSCRIPT_PROMPT)
+        log.info("[TRANSCRIPT] Pegasus response received in %.1fs (%d chars)", _time.perf_counter() - t0, len(raw or ""))
+        transcript = parse_transcript_response(raw)
+        if not transcript:
+            log.warning("[TRANSCRIPT] No segments parsed from response")
+            return jsonify({
+                "error": "Could not parse transcript from response",
+                "video_id": video_id,
+                "raw_preview": (raw[:500] + "..." if raw and len(raw) > 500 else raw or ""),
+            }), 422
+        log.info("[TRANSCRIPT] Parsed %d segments", len(transcript))
+        # Merge into video_analysis
+        updated_analysis = {**existing_analysis, "transcript": transcript}
+        idx = vs_index()
+        for rec in idx:
+            if rec.get("id") == video_id:
+                rec.setdefault("metadata", {})["video_analysis"] = updated_analysis
+                break
+        vs_save()
+        invalidate_video_cache()
+        return jsonify({"video_id": video_id, "transcript": transcript, "count": len(transcript)})
+    except Exception as e:
+        log.error("[TRANSCRIPT] FAILED for video_id=%s: %s", video_id, e, exc_info=True)
         return jsonify({"error": str(e), "video_id": video_id}), 500
 
 
@@ -234,18 +319,43 @@ def api_video_frame(video_id: str):
         return jsonify({"error": str(e)}), 500
 
 
+@videos_bp.route("/<video_id>/faces/<int:face_id>", methods=["GET"])
+def api_video_face_cached(video_id: str, face_id: int):
+    """Serve detected face image from local disk cache (data/videos/{video_id}/faces/face_{id}.png)."""
+    video_id = (video_id or "").strip()
+    if not video_id or face_id < 0:
+        return jsonify({"error": "Invalid video_id or face_id"}), 400
+    filename = f"face_{face_id}.png"
+    b64 = load_face_from_disk(video_id, filename)
+    if not b64:
+        return jsonify({"error": "Face image not found in cache", "video_id": video_id, "face_id": face_id}), 404
+    import base64
+    return Response(base64.b64decode(b64), mimetype="image/png")
+
+
+@videos_bp.route("/<video_id>/object-frames/<path:filename>", methods=["GET"])
+def api_video_object_frame_cached(video_id: str, filename: str):
+    """Serve object frame image from local disk cache (data/videos/{video_id}/objects/{filename})."""
+    video_id = (video_id or "").strip()
+    if not video_id or not filename or ".." in filename or "/" in filename or "\\" in filename:
+        return jsonify({"error": "Invalid video_id or filename"}), 400
+    data = load_object_frame_from_disk(video_id, filename)
+    if not data:
+        return jsonify({"error": "Object frame not found in cache", "video_id": video_id}), 404
+    return Response(data, mimetype="image/jpeg")
+
+
 @videos_bp.route("/<video_id>/insights", methods=["GET", "POST"])
 def api_video_insights(video_id: str):
-    from app.services.vector_store import list_entries as index_list
-    from app.services.vector_store import search as index_search
-
     video_id = (video_id or "").strip()
     if not video_id:
         return jsonify({"error": "video_id is required"}), 400
+    log.info("[INSIGHTS] %s request for video_id=%s", request.method, video_id)
     entry = index_get_entry(video_id)
     if not entry:
+        log.warning("[INSIGHTS] Video not found in index: %s", video_id)
         return jsonify({
-            "error": "Video not found in index. Use a video ID from the videos list (e.g. from Uploads). Refresh the list or re-upload the video.",
+            "error": "Video not found in index. Use a video ID from the videos list.",
             "video_id": video_id,
         }), 404
     meta = entry.get("metadata") or {}
@@ -253,9 +363,11 @@ def api_video_insights(video_id: str):
     output_uri = meta.get("output_s3_uri") or f"{S3_EMBEDDINGS_OUTPUT}/{video_id}"
     is_ready = meta.get("status") == "ready"
 
+    # ── GET: return cached insights (load face images from disk when available) ──
     if request.method == "GET":
         raw_insights = meta.get("video_insights")
         if not raw_insights:
+            log.info("[INSIGHTS] No cached insights for video_id=%s", video_id)
             return jsonify({"video_id": video_id, "insights": None})
         insights = dict(raw_insights)
         objects = list(insights.get("objects") or [])
@@ -263,121 +375,226 @@ def api_video_insights(video_id: str):
         for ob in objects:
             ob_copy = dict(ob)
             ts = ob_copy.get("timestamp")
-            if ts is not None:
+            if ob_copy.get("frame_path"):
+                ob_copy["frame_url"] = f"/api/videos/{video_id}/object-frames/{ob_copy['frame_path']}"
+            elif ts is not None:
                 ob_copy["frame_url"] = f"/api/videos/{video_id}/frame?t={ts}"
             insights["objects"].append(ob_copy)
+        faces = list(insights.get("detected_faces") or [])
+        insights["detected_faces"] = []
+        for f in faces:
+            f_copy = dict(f)
+            if f_copy.get("face_path"):
+                from_disk = load_face_from_disk(video_id, f_copy["face_path"])
+                if from_disk:
+                    f_copy["image_base64"] = from_disk
+            insights["detected_faces"].append(f_copy)
+        log.info(
+            "[INSIGHTS] Returning cached from disk/index: objects=%d detected_faces=%d",
+            len(insights["objects"]),
+            len(insights["detected_faces"]),
+        )
         return jsonify({"video_id": video_id, "insights": insights})
 
+    # ── POST: generate fresh insights ──
     if not s3_uri:
+        log.warning("[INSIGHTS] No S3 URI for video_id=%s", video_id)
         return jsonify({"error": "Video has no S3 location", "video_id": video_id}), 400
     if not is_ready:
+        log.warning("[INSIGHTS] Video not ready: video_id=%s status=%s", video_id, meta.get("status"))
         return jsonify({"error": "Video is not ready (indexing not complete). Wait for status 'ready'.", "video_id": video_id}), 400
 
+    t_total_start = _time.perf_counter()
     try:
-        raw_objects = pegasus_analyze_video(s3_uri, OBJECTS_PROMPT)
-        objects = parse_objects_response(raw_objects)
+        # ────────────────────────────────────────────────────
+        # STEP 1 — Single Pegasus call: objects + face keyframes
+        # ────────────────────────────────────────────────────
+        log.info("[INSIGHTS] Calling Pegasus DETECT_PROMPT for video_id=%s s3=%s", video_id, s3_uri)
+        t0 = _time.perf_counter()
+        raw_response = pegasus_analyze_video(s3_uri, DETECT_PROMPT)
+        log.info("[INSIGHTS] Pegasus raw response received in %.1fs (%d chars)", _time.perf_counter() - t0, len(raw_response or ""))
+        log.info("[INSIGHTS] ── RAW PEGASUS RESPONSE START ──")
+        log.info("%s", raw_response)
+        log.info("[INSIGHTS] ── RAW PEGASUS RESPONSE END ──")
+
+        detect_data = parse_detect_response(raw_response)
+        objects_raw = detect_data["objects"]
+        face_keyframes = detect_data["face_keyframes"]
+
+        # ────────────────────────────────────────────────────
+        # STEP 2 — Process objects: extract frame + bbox
+        # ────────────────────────────────────────────────────
         seen = set()
         out_objects = []
-        for ob in objects:
+        for ob in objects_raw:
             key = (ob["object"], ob["timestamp"])
             if key in seen:
                 continue
             seen.add(key)
             ob_copy = dict(ob)
-            ob_copy["frame_url"] = f"/api/videos/{video_id}/frame?t={ob_copy['timestamp']}"
-            frame_bytes = get_frame_bytes(video_id, ob_copy["timestamp"])
-            if frame_bytes and not is_frame_blurred(frame_bytes):
-                bbox = get_object_bbox_from_frame(frame_bytes, ob_copy.get("object") or "")
-                if bbox:
-                    ob_copy["bbox"] = bbox
+            ts = ob_copy["timestamp"]
+            ob_copy["frame_url"] = f"/api/videos/{video_id}/frame?t={ts}"
+            frame_bytes = get_frame_bytes(video_id, ts)
+            if frame_bytes:
+                frame_filename = save_object_frame_to_disk(video_id, ob_copy.get("object") or "object", ts, frame_bytes)
+                if frame_filename:
+                    ob_copy["frame_path"] = frame_filename
+                    ob_copy["frame_url"] = f"/api/videos/{video_id}/object-frames/{frame_filename}"
+                if not is_frame_blurred(frame_bytes):
+                    bbox = get_object_bbox_from_frame(frame_bytes, ob_copy.get("object") or "")
+                    if bbox:
+                        ob_copy["bbox"] = bbox
+                else:
+                    log.debug("[OBJECTS] Blurred frame at t=%s for %s", ts, ob_copy["object"])
+            else:
+                log.warning("[OBJECTS] Frame extraction FAILED for t=%s", ts)
             out_objects.append(ob_copy)
 
+        log.info("[OBJECTS] Final unique objects: %d", len(out_objects))
+        for ob in out_objects:
+            log.info("  -> %s at t=%ss (bbox=%s)", ob["object"], ob["timestamp"], "yes" if ob.get("bbox") else "no")
+
+        # ────────────────────────────────────────────────────
+        # STEP 3 — Video duration from clip embeddings
+        # ────────────────────────────────────────────────────
         video_duration_sec = 0.0
         try:
             all_clips = load_video_embeddings_from_s3(output_uri)
             clip_list = [c for c in all_clips if c.get("embeddingScope") == "clip"]
             if clip_list:
                 video_duration_sec = max(c.get("endSec", 0) for c in clip_list)
-        except Exception:
-            pass
+            log.info("[INSIGHTS] Video duration=%.1fs (%d clips)", video_duration_sec, len(clip_list))
+        except Exception as e:
+            log.warning("[INSIGHTS] Could not load clips for duration: %s", e)
         if video_duration_sec <= 0:
             video_duration_sec = 300.0
+            log.info("[INSIGHTS] Using fallback duration=%.1fs", video_duration_sec)
 
-        entities = index_list(type_filter="entity")
-        people = []
-        link_data_by_entity = {}
-        for rec in entities:
-            eid = rec.get("id")
-            if not eid:
+        # ────────────────────────────────────────────────────
+        # STEP 4 — Extract faces from the 5 Pegasus keyframes
+        #          using ResNet10 SSD, then deduplicate
+        # ────────────────────────────────────────────────────
+        if not face_keyframes:
+            log.warning("[FACES] Pegasus returned 0 face_keyframes; falling back to 5 evenly-spaced timestamps")
+            n = 5
+            step = video_duration_sec / (n + 1)
+            face_keyframes = [
+                {"timestamp": round(step * (i + 1), 1), "description": f"fallback keyframe {i+1}"}
+                for i in range(n)
+            ]
+
+        log.info("[FACES] Using %d keyframe timestamps for face detection:", len(face_keyframes))
+        for kf in face_keyframes:
+            log.info("  t=%.1fs — %s", kf["timestamp"], kf.get("description", ""))
+
+        all_face_detections: list[dict] = []
+        keyframes_info: list[dict] = []
+
+        for kf in face_keyframes:
+            t = kf["timestamp"]
+            desc = kf.get("description", "")
+            log.info("[FACES] Extracting frame at t=%.1fs (%s)", t, desc)
+            frame_bytes = get_frame_bytes(video_id, t)
+            if not frame_bytes:
+                log.warning("[FACES] Could not extract frame at t=%.1f", t)
+                keyframes_info.append({
+                    "timestamp": t, "description": desc,
+                    "status": "extraction_failed", "faces_detected": 0,
+                })
                 continue
-            full = index_get_entry(eid)
-            if not full or not full.get("embedding"):
+            if is_frame_blurred(frame_bytes):
+                log.info("[FACES] Frame at t=%.1f is blurred, skipping", t)
+                keyframes_info.append({
+                    "timestamp": t, "description": desc,
+                    "status": "blurred", "faces_detected": 0,
+                })
                 continue
-            emb = full["embedding"]
-            try:
-                best_sc = best_clip_score(emb, output_uri, visual_only=True)
-            except Exception:
-                best_sc = 0.0
-            if best_sc < ENTITY_CLIP_MIN_SCORE:
-                continue
-            clips = clip_search(
-                emb, output_uri, top_n=15, min_score=ENTITY_CLIP_MIN_SCORE, visual_only=True
-            )
-            total_sec = sum(c["end"] - c["start"] for c in clips)
-            percent = round((total_sec / video_duration_sec) * 100, 2) if video_duration_sec else 0
-            name = (full.get("metadata") or {}).get("name") or eid
-            face_b64 = (full.get("metadata") or {}).get("face_snap_base64")
-            initials = "".join((w[0] or "").upper() for w in name.split()[:2])[:2] or "?"
-            face_from_video_b64 = get_face_from_video_frames(video_id, clips)
-            people.append({
-                "entity_id": eid,
-                "name": name,
-                "avatar": initials,
-                "percent": percent,
-                "face_snap_base64": face_b64,
-                "face_from_video_base64": face_from_video_b64,
-                "clips": [{"start": c["start"], "end": c["end"], "score": c["score"]} for c in clips],
+
+            faces = detect_and_crop_faces(frame_bytes, output_size=256, min_confidence=0.55)
+            log.info("[FACES] t=%.1fs -> %d faces detected (ResNet10 SSD)", t, len(faces))
+            for face in faces:
+                log.info(
+                    "[FACES]   confidence=%.4f bbox=(%d,%d %dx%d)",
+                    face["confidence"],
+                    face["bbox"]["x"], face["bbox"]["y"],
+                    face["bbox"]["w"], face["bbox"]["h"],
+                )
+
+            keyframes_info.append({
+                "timestamp": t,
+                "description": desc,
+                "status": "ok",
+                "faces_detected": len(faces),
+                "frame_url": f"/api/videos/{video_id}/frame?t={t}",
             })
-            video_results = index_search(emb, top_k=10, type_filter="video")
-            linked_videos = [{"id": r["id"], "label": (r.get("metadata") or {}).get("filename") or r["id"], "type": "video"} for r in video_results if r.get("id") != video_id][:8]
-            transcript = (meta.get("video_analysis") or {}).get("transcript") or []
-            mentions = []
-            for seg in transcript:
-                text = (seg.get("text") or "").strip()
-                time_str = seg.get("time") or "0:00"
-                if name.lower() in text.lower():
-                    mentions.append({"text": text, "timestamp": time_str, "address": "", "nodeId": ""})
-            link_data_by_entity[eid] = {
-                "personName": name,
-                "personInitials": initials,
-                "personFaceBase64": face_from_video_b64,
-                "mentionCount": len(mentions),
-                "mentions": mentions,
-                "linkedNodes": linked_videos,
-            }
 
-        transcript = (meta.get("video_analysis") or {}).get("transcript") or []
-        mentioned_set = set()
-        for seg in transcript:
-            for p in people:
-                if p["name"].lower() in (seg.get("text") or "").lower():
-                    mentioned_set.add(p["name"])
-        mentioned = sorted(mentioned_set)
+            for face in faces:
+                emb = embed_face_crop(face)
+                all_face_detections.append({
+                    "embedding": emb,
+                    "confidence": face["confidence"],
+                    "image_base64": face.get("image_base64", ""),
+                    "bbox": face.get("bbox"),
+                    "timestamp": t,
+                })
 
+        log.info("[FACES] Total raw face detections across %d keyframes: %d", len(face_keyframes), len(all_face_detections))
+
+        unique_clusters = deduplicate_faces(all_face_detections)
+        detected_faces = []
+        for cluster in unique_clusters:
+            fid = cluster["face_id"]
+            img_b64 = cluster["image_base64"]
+            face_path = save_face_to_disk(video_id, fid, img_b64)
+            detected_faces.append({
+                "face_id": fid,
+                "confidence": round(cluster["confidence"], 4),
+                "image_base64": img_b64,
+                "face_path": face_path,
+                "bbox": cluster.get("bbox"),
+                "timestamps": cluster["timestamps"],
+                "appearance_count": cluster["count"],
+            })
+
+        log.info("[FACES] Unique faces after dedup: %d (from %d detections)", len(detected_faces), len(all_face_detections))
+        for df in detected_faces:
+            log.info(
+                "  -> face#%s: conf=%.2f appearances=%d timestamps=%s",
+                df["face_id"], df["confidence"], df["appearance_count"], df["timestamps"],
+            )
+
+        # ────────────────────────────────────────────────────
+        # Build and persist insights (save to index without large base64 when on disk)
+        # ────────────────────────────────────────────────────
         insights = {
-            "people": people,
-            "mentioned": list(mentioned),
             "objects": out_objects,
-            "link_data_by_entity": link_data_by_entity,
+            "detected_faces": detected_faces,
+            "keyframes": keyframes_info,
+            "video_duration_sec": video_duration_sec,
+        }
+        insights_to_save = {
+            "objects": out_objects,
+            "detected_faces": [
+                {**f, "image_base64": "" if f.get("face_path") else f.get("image_base64", "")}
+                for f in detected_faces
+            ],
+            "keyframes": keyframes_info,
             "video_duration_sec": video_duration_sec,
         }
         idx = vs_index()
         for rec in idx:
             if rec.get("id") == video_id:
-                rec.setdefault("metadata", {})["video_insights"] = insights
+                rec.setdefault("metadata", {})["video_insights"] = insights_to_save
                 break
         vs_save()
         invalidate_video_cache()
+
+        total_elapsed = _time.perf_counter() - t_total_start
+        log.info(
+            "[INSIGHTS] COMPLETE video_id=%s: objects=%d faces=%d keyframes=%d time=%.1fs",
+            video_id, len(out_objects), len(detected_faces), len(keyframes_info), total_elapsed,
+        )
         return jsonify({"video_id": video_id, "insights": insights})
     except Exception as e:
+        log.error("[INSIGHTS] FAILED for video_id=%s: %s", video_id, e, exc_info=True)
         return jsonify({"error": str(e), "video_id": video_id}), 500

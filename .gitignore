@@ -13,6 +13,10 @@ dist/
 .DS_Store
 *.log
 *.local
+*.mmd
+
+# Docs
+docs/detected-objects-storage-comparison.md
 
 # IDE
 .idea/

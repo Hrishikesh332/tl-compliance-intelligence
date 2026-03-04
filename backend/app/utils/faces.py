@@ -1,5 +1,6 @@
 import io
 import base64
+import logging
 from pathlib import Path
 
 import cv2
@@ -8,22 +9,38 @@ from PIL import Image, ImageDraw
 
 from app.services.bedrock_marengo import embed_image, media_source_base64
 
+log = logging.getLogger("app.utils.faces")
+
 # Resolve models dir relative to backend (parent of app package)
 _MODEL_DIR = Path(__file__).resolve().parent.parent.parent / "models"
-face_detector_net = cv2.dnn.readNetFromCaffe(
-    str(_MODEL_DIR / "deploy.prototxt"),
-    str(_MODEL_DIR / "res10_300x300_ssd_iter_140000.caffemodel"),
-)
+_PROTOTXT = _MODEL_DIR / "deploy.prototxt"
+_CAFFEMODEL = _MODEL_DIR / "res10_300x300_ssd_iter_140000.caffemodel"
+
+log.info("Loading ResNet10 SSD face detector from %s", _MODEL_DIR)
+if not _PROTOTXT.exists():
+    log.error("MISSING prototxt: %s", _PROTOTXT)
+if not _CAFFEMODEL.exists():
+    log.error("MISSING caffemodel: %s", _CAFFEMODEL)
+
+face_detector_net = cv2.dnn.readNetFromCaffe(str(_PROTOTXT), str(_CAFFEMODEL))
+log.info("ResNet10 SSD face detector loaded OK")
+
 CONFIDENCE_THRESHOLD = 0.65
 MIN_FACE_SIZE = 50
 EMBEDDING_CROP_SIZE = 384
 EMBEDDING_CROP_PADDING = 1.4
+ENTITY_FACE_MIN_CONFIDENCE = 0.72
+
+# Lower threshold so same face in different orientations (e.g. front vs 3/4 view) merges into one
+UNIQUE_FACE_COSINE_THRESHOLD = 0.72
 
 
-def detect_and_crop_faces(image_bytes: bytes, output_size: int = 256) -> list[dict]:
+def detect_and_crop_faces(image_bytes: bytes, output_size: int = 256, min_confidence: float | None = None) -> list[dict]:
+    """Detect faces using ResNet10 SSD (300x300) and crop circular thumbnails + embedding patches."""
     np_arr = np.frombuffer(image_bytes, np.uint8)
     bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     if bgr is None:
+        log.warning("Could not decode image (%d bytes)", len(image_bytes))
         return []
 
     h, w = bgr.shape[:2]
@@ -33,10 +50,12 @@ def detect_and_crop_faces(image_bytes: bytes, output_size: int = 256) -> list[di
 
     faces: list[dict] = []
     idx = 0
+    conf_thresh = min_confidence if min_confidence is not None else CONFIDENCE_THRESHOLD
+    total_candidates = detections.shape[2]
 
-    for i in range(detections.shape[2]):
+    for i in range(total_candidates):
         confidence = float(detections[0, 0, i, 2])
-        if confidence < CONFIDENCE_THRESHOLD:
+        if confidence < conf_thresh:
             continue
 
         x1 = int(max(detections[0, 0, i, 3] * w, 0))
@@ -46,6 +65,7 @@ def detect_and_crop_faces(image_bytes: bytes, output_size: int = 256) -> list[di
 
         box_w, box_h = x2 - x1, y2 - y1
         if box_w < MIN_FACE_SIZE or box_h < MIN_FACE_SIZE:
+            log.debug("Skipping small face: %dx%d at (%d,%d) conf=%.3f", box_w, box_h, x1, y1, confidence)
             continue
 
         cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
@@ -106,16 +126,97 @@ def detect_and_crop_faces(image_bytes: bytes, output_size: int = 256) -> list[di
         })
         idx += 1
 
-    faces.sort(key=lambda f: (f["confidence"], f["bbox"]["w"] * f["bbox"]["h"]), reverse=True)
+    faces.sort(
+        key=lambda f: (f["confidence"], f["bbox"]["w"] * f["bbox"]["h"]),
+        reverse=True,
+    )
+    log.info(
+        "ResNet10 SSD: image=%dx%d candidates=%d accepted=%d (conf_thresh=%.2f)",
+        w, h, total_candidates, len(faces), conf_thresh,
+    )
     return faces
 
 
-def embed_best_face_from_image(image_bytes: bytes) -> list[float] | None:
-    faces = detect_and_crop_faces(image_bytes)
+def embed_face_crop(face: dict) -> list[float] | None:
+    """Embed a single face crop via Marengo. Returns embedding vector or None."""
+    embed_b64 = face.get("embedding_crop_base64") or face.get("image_base64")
+    if not embed_b64:
+        return None
+    try:
+        face_bytes = base64.b64decode(embed_b64)
+        media = media_source_base64(face_bytes)
+        return embed_image(media)
+    except Exception as e:
+        log.warning("Failed to embed face crop: %s", e)
+        return None
+
+
+def embed_best_face_from_image(image_bytes: bytes, min_confidence: float | None = None) -> list[float] | None:
+    faces = detect_and_crop_faces(image_bytes, min_confidence=min_confidence)
     if not faces:
         return None
     best = faces[0]
-    embed_b64 = best.get("embedding_crop_base64") or best["image_base64"]
-    face_bytes = base64.b64decode(embed_b64)
-    media = media_source_base64(face_bytes)
-    return embed_image(media)
+    emb = embed_face_crop(best)
+    if emb:
+        log.info("Embedded best face: confidence=%.4f dim=%d", best["confidence"], len(emb))
+    return emb
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    va = np.array(a, dtype=np.float64)
+    vb = np.array(b, dtype=np.float64)
+    na, nb = np.linalg.norm(va), np.linalg.norm(vb)
+    if na == 0 or nb == 0:
+        return 0.0
+    return float(np.dot(va, vb) / (na * nb))
+
+
+def deduplicate_faces(
+    face_records: list[dict],
+    threshold: float = UNIQUE_FACE_COSINE_THRESHOLD,
+) -> list[dict]:
+    """
+    Given a list of face dicts (each with 'embedding', 'confidence', 'image_base64', 'timestamp'),
+    deduplicate by cosine similarity on embeddings. Faces within `threshold` of an existing cluster
+    are merged (keeping the highest-confidence crop). Returns unique face clusters.
+    """
+    if not face_records:
+        return []
+
+    clusters: list[dict] = []
+    for rec in face_records:
+        emb = rec.get("embedding")
+        if not emb:
+            continue
+        matched = False
+        for cluster in clusters:
+            sim = _cosine(emb, cluster["embedding"])
+            if sim >= threshold:
+                cluster["timestamps"].append(rec.get("timestamp", 0))
+                cluster["count"] += 1
+                if rec.get("confidence", 0) > cluster.get("confidence", 0):
+                    cluster["embedding"] = emb
+                    cluster["confidence"] = rec["confidence"]
+                    cluster["image_base64"] = rec.get("image_base64", "")
+                    cluster["bbox"] = rec.get("bbox")
+                matched = True
+                break
+        if not matched:
+            clusters.append({
+                "face_id": len(clusters),
+                "embedding": emb,
+                "confidence": rec.get("confidence", 0),
+                "image_base64": rec.get("image_base64", ""),
+                "bbox": rec.get("bbox"),
+                "timestamps": [rec.get("timestamp", 0)],
+                "count": 1,
+            })
+
+    for cluster in clusters:
+        cluster["timestamps"] = sorted(set(cluster["timestamps"]))
+
+    log.info(
+        "Face dedup: %d detections -> %d unique faces (threshold=%.2f)",
+        len(face_records), len(clusters), threshold,
+    )
+    return clusters
