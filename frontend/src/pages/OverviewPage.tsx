@@ -380,7 +380,7 @@ export default function OverviewPage() {
               <p className="mt-4 text-text-secondary max-w-lg leading-relaxed">
                 TwelveLabs Marengo and Pegasus models are invoked via <strong className="text-text-primary">AWS Bedrock Runtime</strong>,
                 with video assets stored in S3, vector embeddings indexed for cosine-similarity search,
-                and object detection powered by AWS Rekognition.
+                and AI-detected objects with timestamps (Pegasus + frame thumbnails).
               </p>
               <Link
                 to="/dashboard"
@@ -424,7 +424,7 @@ export default function OverviewPage() {
                   {[
                     { name: 'Bedrock Runtime', desc: 'Marengo & Pegasus model runtime' },
                     { name: 'S3 + Vector Index', desc: 'Video storage & embedding search' },
-                    { name: 'Rekognition', desc: 'Object detection & bounding boxes' },
+                    { name: 'FFmpeg', desc: 'Frame extraction for thumbnails & faces' },
                   ].map((svc) => (
                     <div key={svc.name} className="text-center px-2 py-2.5 rounded-lg bg-white border border-gray-200">
                       <p className="text-xs font-semibold text-text-primary">{svc.name}</p>

@@ -77,11 +77,29 @@ def load_face_from_disk(video_id: str, face_filename: str) -> str | None:
         return None
 
 
+# Light compression for object thumbnails: max width and JPEG quality for faster load on Video Analysis page.
+OBJECT_FRAME_MAX_WIDTH = 400
+OBJECT_FRAME_JPEG_QUALITY = 82
+
+
 def save_object_frame_to_disk(video_id: str, object_label: str, timestamp: int | float, frame_bytes: bytes) -> str | None:
-    """Save object frame to data/videos/{video_id}/objects/{slug}_{timestamp}.jpg. Returns filename or None."""
+    """Save object frame to data/videos/{video_id}/objects/{slug}_{timestamp}.jpg with light compression. Returns filename or None."""
     if not frame_bytes:
         return None
     try:
+        from PIL import Image
+        import io
+        img = Image.open(io.BytesIO(frame_bytes))
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        w, h = img.size
+        if w > OBJECT_FRAME_MAX_WIDTH:
+            ratio = OBJECT_FRAME_MAX_WIDTH / w
+            new_h = max(1, int(h * ratio))
+            img = img.resize((OBJECT_FRAME_MAX_WIDTH, new_h), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=OBJECT_FRAME_JPEG_QUALITY, optimize=True)
+        compressed = buf.getvalue()
         slug = re.sub(r"[^\w\-]", "-", (object_label or "object").strip().lower())[:50]
         slug = slug.strip("-") or "object"
         cache_dir = get_insights_cache_dir(video_id) / "objects"
@@ -89,8 +107,8 @@ def save_object_frame_to_disk(video_id: str, object_label: str, timestamp: int |
         ts = int(timestamp) if isinstance(timestamp, (int, float)) else 0
         filename = f"{slug}_{ts}.jpg"
         path = cache_dir / filename
-        path.write_bytes(frame_bytes)
-        log.info("[CACHE] Saved object frame to %s", path)
+        path.write_bytes(compressed)
+        log.info("[CACHE] Saved object frame to %s (%d bytes)", path, len(compressed))
         return filename
     except Exception as e:
         log.warning("[CACHE] Failed to save object frame for video %s: %s", video_id, e)
@@ -146,6 +164,7 @@ VIDEO_ANALYSIS_PROMPT = """Analyze this video and respond with exactly one JSON 
   "description": "One or two paragraph summary: what the video shows, context (e.g. compliance review, inspection), key areas covered, and who recorded it if evident.",
   "categories": ["Category1", "Category2", "Category3"],
   "topics": ["Topic1", "Topic2", "Topic3", "Topic4"],
+  "people": ["Name1", "Name2"],
   "riskLevel": "high" or "medium" or "low",
   "risks": [
     { "label": "Brief issue description", "severity": "high" or "medium" or "low", "timestamp": "M:SS" }
@@ -160,6 +179,7 @@ VIDEO_ANALYSIS_PROMPT = """Analyze this video and respond with exactly one JSON 
 Rules:
 - categories: 2–4 high-level labels (e.g. Workplace Safety, Facility Inspection, Compliance Audit).
 - topics: 3–6 specific subjects covered (e.g. Fire safety equipment, Emergency exits, Workspace layout).
+- people: optional array of distinct people identified in the video (names mentioned in speech, officer names, interviewees, etc.). Use empty array [] if none identified.
 - riskLevel: overall risk for the video. risks: list every compliance or safety issue you notice. Each risk must have: label (short description), severity (high/medium/low), and timestamp (when in the video it occurs, in M:SS format, e.g. "0:00", "2:14", "1:05").
 - transcript: produce a COMPLETE transcript for the ENTIRE video. CRITICAL: (1) The first segment MUST start at "0:00" (the very beginning). (2) The last segment MUST correspond to the end of the video—include speech right up to the final second. (3) Do not leave any time gaps: every part of the video from 0:00 to the end must be represented by transcript segments in chronological order. (4) Use verbatim or near-verbatim speech (word-for-word when possible). (5) Create a new segment every time the speaker changes or every 1–2 sentences; use timestamps in M:SS for the start of each segment. (6) For short videos use at least 15–20 segments; for longer videos use many more so the transcript is thorough. (7) Do not summarize, skip, or omit any part of the spoken content—transcribe what is said from beginning to end.
 - Use only double quotes and valid JSON. No trailing commas."""
@@ -300,11 +320,18 @@ def normalize_video_analysis(data: dict) -> dict:
 
     out_transcript.sort(key=lambda seg: _timestamp_seconds(seg["time"]))
 
+    # Optional: people (names/identifiers from analysis or transcript)
+    people = data.get("people")
+    if not isinstance(people, list):
+        people = data.get("mentioned") if isinstance(data.get("mentioned"), list) else []
+    people = [str(p).strip() for p in people if p]
+
     return {
         "title": title,
         "description": description,
         "categories": categories,
         "topics": topics,
+        "people": people,
         "riskLevel": risk_level,
         "risks": out_risks,
         "transcript": out_transcript,
@@ -441,61 +468,6 @@ def get_face_from_video_frames(video_id: str, clips: list[dict]) -> str | None:
             log.warning("Face detection failed at t=%.1f: %s", t, e)
             continue
     log.info("No face found in video_id=%s across %d timestamps", video_id, len(timestamps_to_try))
-    return None
-
-
-def normalize_label_for_match(label: str) -> str:
-    return " ".join((label or "").lower().strip().split())
-
-
-def labels_match(object_label: str, rek_label_name: str) -> bool:
-    a = normalize_label_for_match(object_label)
-    b = normalize_label_for_match(rek_label_name)
-    if a == b:
-        return True
-    if a in b or b in a:
-        return True
-    a_words = set(a.split())
-    b_words = set(b.split())
-    return bool(a_words & b_words)
-
-
-def get_object_bbox_from_frame(frame_bytes: bytes, object_label: str) -> dict | None:
-    if not frame_bytes or not (object_label or "").strip():
-        return None
-    try:
-        import boto3
-        client = boto3.client("rekognition", region_name=os.environ.get("AWS_REGION", "us-east-1"))
-        log.debug("Calling Rekognition detect_labels for '%s' (%d bytes)", object_label, len(frame_bytes))
-        response = client.detect_labels(
-            Image={"Bytes": frame_bytes},
-            MaxLabels=50,
-        )
-    except Exception as e:
-        log.warning("Rekognition detect_labels FAILED: %s", e)
-        return None
-    labels_found = [l.get("Name", "") for l in response.get("Labels", [])]
-    log.debug("Rekognition labels: %s", labels_found[:15])
-    for label_obj in response.get("Labels", []):
-        name = (label_obj.get("Name") or "").strip()
-        if not labels_match(object_label, name):
-            continue
-        instances = label_obj.get("Instances") or []
-        if not instances:
-            log.debug("Label '%s' matched but no instances with bbox", name)
-            continue
-        box = instances[0].get("BoundingBox")
-        if not box:
-            continue
-        left = float(box.get("Left", 0))
-        top = float(box.get("Top", 0))
-        width = float(box.get("Width", 0))
-        height = float(box.get("Height", 0))
-        if width <= 0 or height <= 0:
-            continue
-        log.debug("BBox for '%s': left=%.3f top=%.3f w=%.3f h=%.3f", object_label, left, top, width, height)
-        return {"left": left, "top": top, "width": width, "height": height}
-    log.debug("No matching bbox for '%s' in Rekognition response", object_label)
     return None
 
 
@@ -715,31 +687,84 @@ def clip_search(
 def best_clip_score(
     query_emb: list[float], output_s3_uri: str, visual_only: bool = False
 ) -> float:
+    best, _, _ = best_clip_score_and_count(query_emb, output_s3_uri, None, visual_only)
+    return best
+
+
+def best_clip_score_and_count(
+    query_emb: list[float],
+    output_s3_uri: str,
+    min_score: float | None,
+    visual_only: bool = False,
+    top_k: int = 5,
+) -> tuple[float, int, float]:
+    """
+    One-pass over clip embeddings: return (best similarity, count above min_score,
+    avg of top-k similarities). Used for entity ranking: consistency (high top-k
+    avg) and multiplicity (count) favor the real entity video over one high outlier.
+    """
     all_clips = load_video_embeddings_from_s3(output_s3_uri)
     clips = _clip_list_for_face_search(all_clips, visual_only)
     if not clips:
-        return 0.0
-    best = 0.0
+        return 0.0, 0, 0.0
+    sims: list[float] = []
+    count = 0
     for c in clips:
         sim = _cosine(query_emb, c["embedding"])
-        if sim > best:
-            best = sim
-    return round(best, 6)
+        sims.append(sim)
+        if min_score is not None and sim >= min_score:
+            count += 1
+    best = max(sims) if sims else 0.0
+    sims_desc = sorted(sims, reverse=True)
+    take = min(top_k, len(sims_desc))
+    top_k_avg = sum(sims_desc[:take]) / take if take else 0.0
+    return round(best, 6), count, round(top_k_avg, 6)
+
+
+def clips_above_threshold(
+    query_emb: list[float],
+    output_s3_uri: str,
+    min_score: float,
+    visual_only: bool = False,
+    max_clips: int = 50,
+) -> list[dict]:
+    """
+    Return all clip segments (start, end, score) where the query embedding
+    scores above min_score, using only Marengo clip embeddings from S3.
+    No FFmpeg or frame sampling — full coverage across the whole video.
+    """
+    all_clips = load_video_embeddings_from_s3(output_s3_uri)
+    clips = _clip_list_for_face_search(all_clips, visual_only)
+    if not clips:
+        return []
+    scored = []
+    for c in clips:
+        sim = _cosine(query_emb, c["embedding"])
+        if sim < min_score:
+            continue
+        scored.append({
+            "start": c.get("startSec", 0),
+            "end": c.get("endSec", 0),
+            "score": round(sim, 6),
+            "type": c.get("embeddingOption", "visual"),
+        })
+    scored.sort(key=lambda x: -x["score"])
+    return scored[:max_clips]
 
 
 def _clip_timestamps_for_face_sampling(
     clips: list[dict],
     entity_emb: list[float],
-    max_clips: int = 10,
-    points_per_clip: int = 3,
-    add_uniform_grid_sec: float | None = 6.0,
-    max_grid_span_sec: float = 120.0,
+    max_clips: int = 5,
+    points_per_clip: int = 2,
+    add_uniform_grid_sec: float | None = 10.0,
+    max_grid_span_sec: float = 90.0,
+    max_timestamps: int = 12,
 ) -> list[float]:
     """
     Get timestamps to sample for face matching. Score each clip by similarity to
-    entity embedding, then sample from the TOP-SCORING clips at multiple points
-    (start/mid/end). Also add a uniform time grid so we don't miss the person
-    if they appear in a segment that had low clip-level score.
+    entity embedding, then sample from the TOP-SCORING clips. Capped at
+    max_timestamps to keep entity search fast.
     """
     if not clips or not entity_emb:
         return []
@@ -753,51 +778,57 @@ def _clip_timestamps_for_face_sampling(
     timestamps = []
     seen_sec = set()
     for s in scored[:max_clips]:
+        if len(timestamps) >= max_timestamps:
+            break
         start, end = s["start"], s["end"]
         duration = max(end - start, 0.5)
         for i in range(points_per_clip):
+            if len(timestamps) >= max_timestamps:
+                break
             frac = (i + 1) / (points_per_clip + 1)
             t = start + duration * frac
             key = int(t)
             if key not in seen_sec:
                 seen_sec.add(key)
                 timestamps.append(t)
-    if add_uniform_grid_sec and add_uniform_grid_sec > 0:
+    if len(timestamps) < max_timestamps and add_uniform_grid_sec and add_uniform_grid_sec > 0:
         video_end = max((c.get("endSec", 0) for c in clips), default=60.0)
         span = min(video_end, max_grid_span_sec)
         t = 0.0
-        while t <= span:
+        while t <= span and len(timestamps) < max_timestamps:
             key = int(t)
             if key not in seen_sec:
                 seen_sec.add(key)
                 timestamps.append(t)
             t += add_uniform_grid_sec
     timestamps.sort()
-    return timestamps
+    return timestamps[:max_timestamps]
 
 
 def face_match_score_in_video(
     entity_emb: list[float],
     video_id: str,
     output_s3_uri: str,
-    max_frames: int = 24,
+    max_frames: int = 6,
 ) -> tuple[float, list[dict]]:
     """
     Score how well an entity (face) matches this video by extracting frames at timestamps
     in the clips most similar to the entity, then detecting faces with ResNet10 SSD and
     comparing embeddings. Returns (best_score, matching segments).
+    Limited to max_frames to keep search responsive.
     """
     from app.utils.faces import detect_and_crop_faces
-    log.info("face_match_score_in_video: video_id=%s output=%s", video_id, output_s3_uri[:80])
+    log.info("face_match_score_in_video: video_id=%s max_frames=%d", video_id, max_frames)
     all_clips = load_video_embeddings_from_s3(output_s3_uri)
     clips = _clip_list_for_face_search(all_clips, visual_only=True)
     if not clips:
         log.warning("No visual clips found for video_id=%s", video_id)
         return 0.0, []
     timestamps = _clip_timestamps_for_face_sampling(
-        clips, entity_emb, max_clips=12, points_per_clip=3
+        clips, entity_emb, max_clips=6, points_per_clip=2, max_timestamps=max_frames
     )
-    log.info("Sampling %d timestamps for face matching in video_id=%s", len(timestamps), video_id)
+    if not timestamps:
+        return 0.0, []
     best_score = 0.0
     matching_clips: list[dict] = []
     frames_checked = 0
@@ -828,9 +859,14 @@ def face_match_score_in_video(
                         "end": t + 2.0,
                         "score": round(sim, 6),
                     })
+                # Early exit only on very strong match to avoid missing the entity
+                if best_score >= 0.72 and len(matching_clips) >= 2:
+                    break
         except Exception as e:
             log.warning("Face compare failed at t=%.1f: %s", t, e)
             continue
+        if best_score >= 0.72 and len(matching_clips) >= 2:
+            break
     matching_clips.sort(key=lambda x: -x["score"])
     merged = []
     for seg in matching_clips:
@@ -854,6 +890,35 @@ def face_match_score_in_video(
 # Minimum cosine similarity for a clip/face to count as "this person appears here".
 # Face-to-face matching tends to be more discriminative; keep threshold so only clear matches count.
 ENTITY_CLIP_MIN_SCORE = 0.48
+
+# Entity ranking: weight consistency (avg of top clips) and multiplicity (count)
+# so the video where the person actually appears ranks above one high-scoring outlier.
+ENTITY_RANK_TOP_K = 5  # number of top clip scores to average for consistency
+ENTITY_RANK_BEST_WEIGHT = 0.2   # weight for single best clip (low: one outlier shouldn't win)
+ENTITY_RANK_AVG_WEIGHT = 0.65  # weight for avg of top-k clips (consistency)
+ENTITY_RANK_COUNT_WEIGHT = 0.015  # per-clip boost, cap 15 clips
+ENTITY_RANK_COUNT_CAP = 15
+
+
+def entity_ranking_score(
+    best_score: float,
+    count_above_threshold: int,
+    top_k_avg: float,
+) -> float:
+    """
+    Rank by consistency and multiplicity, not just peak. A video where the entity
+    appears in many segments has high top_k_avg and count; a wrong video often
+    has one high clip and rest low, so top_k_avg is lower. This puts the real
+    entity video on top.
+    """
+    count_boost = ENTITY_RANK_COUNT_WEIGHT * min(count_above_threshold, ENTITY_RANK_COUNT_CAP)
+    rank = (
+        ENTITY_RANK_BEST_WEIGHT * best_score
+        + ENTITY_RANK_AVG_WEIGHT * top_k_avg
+        + count_boost
+    )
+    # Normalize so score stays in a similar range; avg term can be small if clips are few
+    return round(rank, 6)
 
 
 def extract_unique_faces_from_video(

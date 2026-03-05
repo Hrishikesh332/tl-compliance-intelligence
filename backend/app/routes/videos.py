@@ -18,7 +18,6 @@ from app.utils.video_helpers import (
     get_frame_bytes,
     extract_duration_and_thumbnail,
     is_frame_blurred,
-    get_object_bbox_from_frame,
     get_video_list_cache,
     set_video_list_cache,
     VIDEO_ANALYSIS_PROMPT,
@@ -354,6 +353,7 @@ def api_video_frame(video_id: str):
 @videos_bp.route("/<video_id>/faces/<int:face_id>", methods=["GET"])
 def api_video_face_cached(video_id: str, face_id: int):
     """Serve detected face image from local disk cache (data/videos/{video_id}/faces/face_{id}.png)."""
+    import base64
     video_id = (video_id or "").strip()
     if not video_id or face_id < 0:
         return jsonify({"error": "Invalid video_id or face_id"}), 400
@@ -361,7 +361,6 @@ def api_video_face_cached(video_id: str, face_id: int):
     b64 = load_face_from_disk(video_id, filename)
     if not b64:
         return jsonify({"error": "Face image not found in cache", "video_id": video_id, "face_id": face_id}), 404
-    import base64
     return Response(base64.b64decode(b64), mimetype="image/png")
 
 
@@ -472,11 +471,7 @@ def api_video_insights(video_id: str):
                 if frame_filename:
                     ob_copy["frame_path"] = frame_filename
                     ob_copy["frame_url"] = f"/api/videos/{video_id}/object-frames/{frame_filename}"
-                if not is_frame_blurred(frame_bytes):
-                    bbox = get_object_bbox_from_frame(frame_bytes, ob_copy.get("object") or "")
-                    if bbox:
-                        ob_copy["bbox"] = bbox
-                else:
+                if is_frame_blurred(frame_bytes):
                     log.debug("[OBJECTS] Blurred frame at t=%s for %s", ts, ob_copy["object"])
             else:
                 log.warning("[OBJECTS] Frame extraction FAILED for t=%s", ts)
@@ -484,7 +479,7 @@ def api_video_insights(video_id: str):
 
         log.info("[OBJECTS] Final unique objects: %d", len(out_objects))
         for ob in out_objects:
-            log.info("  -> %s at t=%ss (bbox=%s)", ob["object"], ob["timestamp"], "yes" if ob.get("bbox") else "no")
+            log.info("  -> %s at t=%ss", ob["object"], ob["timestamp"])
 
         # ────────────────────────────────────────────────────
         # STEP 3 — Video duration from clip embeddings
@@ -503,8 +498,10 @@ def api_video_insights(video_id: str):
             log.info("[INSIGHTS] Using fallback duration=%.1fs", video_duration_sec)
 
         # ────────────────────────────────────────────────────
-        # STEP 4 — Extract faces from the 5 Pegasus keyframes
-        #          using ResNet10 SSD, then deduplicate
+        # STEP 4 — Extract faces: Pegasus keyframes + uniform sampling across video
+        #          so we don't miss people who appear at times Pegasus didn't pick.
+        #          ResNet10 SSD + Marengo embeddings, then deduplicate (same person
+        #          at different orientations merges into one).
         # ────────────────────────────────────────────────────
         if not face_keyframes:
             log.warning("[FACES] Pegasus returned 0 face_keyframes; falling back to 5 evenly-spaced timestamps")
@@ -515,34 +512,53 @@ def api_video_insights(video_id: str):
                 for i in range(n)
             ]
 
-        log.info("[FACES] Using %d keyframe timestamps for face detection:", len(face_keyframes))
-        for kf in face_keyframes:
-            log.info("  t=%.1fs — %s", kf["timestamp"], kf.get("description", ""))
+        keyframe_ts_set = {round(kf["timestamp"], 1) for kf in face_keyframes}
+        # Add uniform samples across the video so faces at non-keyframe times are not missed
+        n_uniform = 14
+        step_sec = max(video_duration_sec / (n_uniform + 1), 2.0)
+        uniform_timestamps = [round(step_sec * (i + 1), 1) for i in range(n_uniform)]
+        # Only add uniform t if not already within 2.5s of a keyframe (avoid duplicate frames)
+        face_sample_timestamps: list[tuple[float, str]] = [
+            (round(kf["timestamp"], 1), kf.get("description", ""))
+            for kf in face_keyframes
+        ]
+        for t in uniform_timestamps:
+            if any(abs(t - kt) < 2.5 for kt in keyframe_ts_set):
+                continue
+            face_sample_timestamps.append((t, f"uniform sample t={t}s"))
+
+        log.info("[FACES] Using %d frames for face detection (keyframes + uniform):", len(face_sample_timestamps))
+        for t, desc in face_sample_timestamps[:10]:
+            log.info("  t=%.1fs — %s", t, desc)
+        if len(face_sample_timestamps) > 10:
+            log.info("  ... and %d more", len(face_sample_timestamps) - 10)
 
         all_face_detections: list[dict] = []
         keyframes_info: list[dict] = []
+        # Slightly lower confidence (0.50) to catch more faces (e.g. partial profile)
+        face_min_conf = 0.50
 
-        for kf in face_keyframes:
-            t = kf["timestamp"]
-            desc = kf.get("description", "")
+        for t, desc in face_sample_timestamps:
             log.info("[FACES] Extracting frame at t=%.1fs (%s)", t, desc)
             frame_bytes = get_frame_bytes(video_id, t)
             if not frame_bytes:
                 log.warning("[FACES] Could not extract frame at t=%.1f", t)
-                keyframes_info.append({
-                    "timestamp": t, "description": desc,
-                    "status": "extraction_failed", "faces_detected": 0,
-                })
+                if t in keyframe_ts_set:
+                    keyframes_info.append({
+                        "timestamp": t, "description": desc,
+                        "status": "extraction_failed", "faces_detected": 0,
+                    })
                 continue
             if is_frame_blurred(frame_bytes):
                 log.info("[FACES] Frame at t=%.1f is blurred, skipping", t)
-                keyframes_info.append({
-                    "timestamp": t, "description": desc,
-                    "status": "blurred", "faces_detected": 0,
-                })
+                if t in keyframe_ts_set:
+                    keyframes_info.append({
+                        "timestamp": t, "description": desc,
+                        "status": "blurred", "faces_detected": 0,
+                    })
                 continue
 
-            faces = detect_and_crop_faces(frame_bytes, output_size=256, min_confidence=0.55)
+            faces = detect_and_crop_faces(frame_bytes, output_size=256, min_confidence=face_min_conf)
             log.info("[FACES] t=%.1fs -> %d faces detected (ResNet10 SSD)", t, len(faces))
             for face in faces:
                 log.info(
@@ -552,16 +568,19 @@ def api_video_insights(video_id: str):
                     face["bbox"]["w"], face["bbox"]["h"],
                 )
 
-            keyframes_info.append({
-                "timestamp": t,
-                "description": desc,
-                "status": "ok",
-                "faces_detected": len(faces),
-                "frame_url": f"/api/videos/{video_id}/frame?t={t}",
-            })
+            if t in keyframe_ts_set:
+                keyframes_info.append({
+                    "timestamp": t,
+                    "description": desc,
+                    "status": "ok",
+                    "faces_detected": len(faces),
+                    "frame_url": f"/api/videos/{video_id}/frame?t={t}",
+                })
 
             for face in faces:
                 emb = embed_face_crop(face)
+                if emb is None:
+                    continue
                 all_face_detections.append({
                     "embedding": emb,
                     "confidence": face["confidence"],
@@ -570,7 +589,7 @@ def api_video_insights(video_id: str):
                     "timestamp": t,
                 })
 
-        log.info("[FACES] Total raw face detections across %d keyframes: %d", len(face_keyframes), len(all_face_detections))
+        log.info("[FACES] Total raw face detections across %d frames: %d", len(face_sample_timestamps), len(all_face_detections))
 
         unique_clusters = deduplicate_faces(all_face_detections)
         detected_faces = []

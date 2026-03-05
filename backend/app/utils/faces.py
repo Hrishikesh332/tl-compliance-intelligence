@@ -31,8 +31,10 @@ EMBEDDING_CROP_SIZE = 384
 EMBEDDING_CROP_PADDING = 1.4
 ENTITY_FACE_MIN_CONFIDENCE = 0.72
 
-# Lower threshold so same face in different orientations (e.g. front vs 3/4 view) merges into one
-UNIQUE_FACE_COSINE_THRESHOLD = 0.72
+# Threshold for merging same person across frames/orientations. Lower = merge more (same person
+# front vs profile); higher = split more (different people stay separate). 0.70 keeps different
+# people as separate faces while still merging the same person at slightly different angles.
+UNIQUE_FACE_COSINE_THRESHOLD = 0.70
 
 
 def detect_and_crop_faces(image_bytes: bytes, output_size: int = 256, min_confidence: float | None = None) -> list[dict]:

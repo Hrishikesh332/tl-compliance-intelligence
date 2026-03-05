@@ -195,7 +195,30 @@ function PriorityTag({ priority }: { priority: 'low' | 'medium' | 'high' }) {
   )
 }
 
+function EntityAvatarCircle({ entity, imageFailed, onImageError }: { entity: TableEntity; imageFailed: boolean; onImageError: () => void }) {
+  const showFallback = !entity.imageUrl || imageFailed
+  return (
+    <div
+      className="relative w-7 h-7 rounded-full border-2 border-surface overflow-hidden bg-card shrink-0 flex items-center justify-center ring-1 ring-white"
+      title={entity.name}
+    >
+      {showFallback ? (
+        <span className="text-[10px] font-medium text-gray-600">{entity.initials}</span>
+      ) : (
+        <img
+          src={entity.imageUrl}
+          alt=""
+          className="w-full h-full object-cover"
+          onError={onImageError}
+          referrerPolicy="no-referrer"
+        />
+      )}
+    </div>
+  )
+}
+
 function EntityAvatars({ entities }: { entities: TableEntity[] }) {
+  const [failedIds, setFailedIds] = useState<Set<string>>(() => new Set())
   if (!entities?.length) return <span className="text-sm text-gray-400">—</span>
   const maxCircles = 4
   const show = entities.slice(0, maxCircles)
@@ -204,17 +227,12 @@ function EntityAvatars({ entities }: { entities: TableEntity[] }) {
     <div className="flex items-center gap-0.5">
       <div className="flex items-center -space-x-2.5">
         {show.map((e) => (
-          <div
+          <EntityAvatarCircle
             key={e.id}
-            className="relative w-7 h-7 rounded-full border-2 border-surface overflow-hidden bg-card shrink-0 flex items-center justify-center ring-1 ring-white"
-            title={e.name}
-          >
-            {e.imageUrl ? (
-              <img src={e.imageUrl} alt="" className="w-full h-full object-cover" />
-            ) : (
-              <span className="text-[10px] font-medium text-gray-600">{e.initials}</span>
-            )}
-          </div>
+            entity={e}
+            imageFailed={failedIds.has(e.id)}
+            onImageError={() => setFailedIds((prev) => new Set(prev).add(e.id))}
+          />
         ))}
       </div>
       {rest > 0 && (
@@ -274,6 +292,13 @@ type VideoItem = {
   durationSeconds?: number
   clips?: ClipMatch[]
   searchScore?: number
+  /** From metadata.video_analysis (video analysis) */
+  categories?: string[]
+  aboutTopics?: string[]
+  people?: string[]
+  riskLevel?: 'low' | 'medium' | 'high'
+  /** From metadata.video_insights (detected objects in video) */
+  detectedObjects?: string[]
 }
 
 function relevanceLabel(clips: ClipMatch[] | undefined): { label: string; color: string } {
@@ -494,10 +519,13 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
   const [activeCategory, setActiveCategory] = useState<string>('All')
   const [viewMode, setViewMode] = useState<'videos' | 'folders' | 'tabular'>('videos')
   const [openFolderIdx, setOpenFolderIdx] = useState<number | null>(null)
+  const [tabularPage, setTabularPage] = useState(1)
+  const TABULAR_PAGE_SIZE = 4
   const { videos: cachedVideos } = useVideoCache()
   const apiVideos = useMemo<VideoItem[]>(() => {
     return cachedVideos.map((v: CachedVideo) => {
       const meta = v.metadata || {}
+      const analysis = meta.video_analysis as { categories?: string[]; topics?: string[]; people?: string[]; riskLevel?: string } | undefined
       const uploaded = meta.uploaded_at || ''
       let uploadDate = ''
       if (uploaded) {
@@ -507,6 +535,31 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
         } catch { uploadDate = uploaded }
       }
       const dur = v.duration_seconds
+      const riskLevel = analysis?.riskLevel
+      const validRisk = riskLevel === 'high' || riskLevel === 'medium' || riskLevel === 'low' ? riskLevel : undefined
+      const insights = meta.video_insights as { objects?: Array<{ object?: string }>; detected_faces?: Array<{ face_id?: number | string; face_path?: string }> } | undefined
+      const rawObjects = Array.isArray(insights?.objects) ? insights.objects : []
+      const detectedObjects = [...new Set(rawObjects.map((o) => (o && typeof o.object === 'string' ? o.object.trim() : '')).filter(Boolean))]
+      const detectedFaces = Array.isArray(insights?.detected_faces) ? insights.detected_faces : []
+      const entities: TableEntity[] = detectedFaces.map((f, i) => {
+        let faceId: number
+        if (typeof f.face_id === 'number' && Number.isInteger(f.face_id)) {
+          faceId = f.face_id
+        } else if (typeof f.face_id === 'string' && /^\d+$/.test(f.face_id)) {
+          faceId = parseInt(f.face_id, 10)
+        } else if (f.face_path && typeof f.face_path === 'string') {
+          const m = f.face_path.match(/face_(\d+)\.png/)
+          faceId = m ? parseInt(m[1], 10) : i
+        } else {
+          faceId = i
+        }
+        return {
+          id: `face-${v.id}-${faceId}`,
+          name: `Face ${faceId + 1}`,
+          imageUrl: `${API_BASE}/api/videos/${v.id}/faces/${faceId}`,
+          initials: `F${faceId + 1}`,
+        }
+      })
       return {
         id: v.id,
         title: meta.filename || v.id,
@@ -518,10 +571,15 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
           ...(Array.isArray(meta.tags) ? meta.tags : []),
           meta.status === 'ready' ? 'Indexed' : meta.status === 'indexing' ? 'Indexing' : 'Uploaded',
         ],
-        entities: [],
+        entities,
         streamUrl: v.stream_url || undefined,
         thumbnailUrl: v.thumbnail_url || undefined,
         durationSeconds: dur ?? undefined,
+        categories: Array.isArray(analysis?.categories) ? analysis.categories : undefined,
+        aboutTopics: Array.isArray(analysis?.topics) ? analysis.topics : undefined,
+        people: Array.isArray(analysis?.people) ? analysis.people : undefined,
+        riskLevel: validRisk,
+        detectedObjects: detectedObjects.length > 0 ? detectedObjects : undefined,
       }
     })
   }, [cachedVideos])
@@ -648,6 +706,34 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
     return list
   }, [allVideos, sortBy, activeCategory, searchResults])
 
+  /** For tabular view: always merge analysis from cache so categories/topics/people/riskLevel are up to date (from video analysis, not entity-indexed). */
+  const videosForTable = useMemo(() => {
+    return filteredVideos.map((v) => {
+      const cached = cachedVideos.find((c) => c.id === v.id)
+      const analysis = cached?.metadata?.video_analysis as { categories?: string[]; topics?: string[]; people?: string[]; riskLevel?: string } | undefined
+      if (!analysis) return v
+      const riskLevel = analysis.riskLevel
+      const validRisk = riskLevel === 'high' || riskLevel === 'medium' || riskLevel === 'low' ? riskLevel : undefined
+      return {
+        ...v,
+        categories: Array.isArray(analysis.categories) ? analysis.categories : v.categories,
+        aboutTopics: Array.isArray(analysis.topics) ? analysis.topics : v.aboutTopics,
+        people: Array.isArray(analysis.people) ? analysis.people : v.people,
+        riskLevel: validRisk ?? v.riskLevel,
+      }
+    })
+  }, [filteredVideos, cachedVideos])
+
+  const totalTabularPages = Math.max(1, Math.ceil(videosForTable.length / TABULAR_PAGE_SIZE))
+  const paginatedTabularVideos = useMemo(() => {
+    const start = (tabularPage - 1) * TABULAR_PAGE_SIZE
+    return videosForTable.slice(start, start + TABULAR_PAGE_SIZE)
+  }, [videosForTable, tabularPage])
+
+  useEffect(() => {
+    if (viewMode === 'tabular' && tabularPage > totalTabularPages) setTabularPage(1)
+  }, [viewMode, tabularPage, totalTabularPages])
+
   const dynamicFolders = useMemo(() => {
     const tagMap: Record<string, string[]> = {}
     for (const v of apiVideos) {
@@ -704,6 +790,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
       }
       const results: VideoItem[] = (data.results || []).map((r: any) => {
         const meta = r.metadata || {}
+        const analysis = meta.video_analysis as { categories?: string[]; topics?: string[]; people?: string[]; riskLevel?: string } | undefined
         let uploadDate = ''
         try {
           const u = meta.uploaded_at || ''
@@ -713,6 +800,31 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
           }
         } catch { uploadDate = meta.uploaded_at || '' }
         const dur = r.duration_seconds ?? meta.duration_seconds
+        const riskLevel = analysis?.riskLevel
+        const validRisk = riskLevel === 'high' || riskLevel === 'medium' || riskLevel === 'low' ? riskLevel : undefined
+        const insights = meta.video_insights as { objects?: Array<{ object?: string }>; detected_faces?: Array<{ face_id?: number | string; face_path?: string }> } | undefined
+        const rawObjs = Array.isArray(insights?.objects) ? insights.objects : []
+        const detectedObjects = [...new Set(rawObjs.map((o) => (o && typeof o.object === 'string' ? o.object.trim() : '')).filter(Boolean))]
+        const detectedFaces = Array.isArray(insights?.detected_faces) ? insights.detected_faces : []
+        const entities: TableEntity[] = detectedFaces.map((f, i) => {
+          let faceId: number
+          if (typeof f.face_id === 'number' && Number.isInteger(f.face_id)) {
+            faceId = f.face_id
+          } else if (typeof f.face_id === 'string' && /^\d+$/.test(f.face_id)) {
+            faceId = parseInt(f.face_id, 10)
+          } else if (f.face_path && typeof f.face_path === 'string') {
+            const m = f.face_path.match(/face_(\d+)\.png/)
+            faceId = m ? parseInt(m[1], 10) : i
+          } else {
+            faceId = i
+          }
+          return {
+            id: `face-${r.id}-${faceId}`,
+            name: `Face ${faceId + 1}`,
+            imageUrl: `${API_BASE}/api/videos/${r.id}/faces/${faceId}`,
+            initials: `F${faceId + 1}`,
+          }
+        })
         return {
           id: r.id,
           title: meta.filename || r.id,
@@ -724,12 +836,17 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
             ...(Array.isArray(meta.tags) ? meta.tags : []),
             meta.status === 'ready' ? 'Indexed' : meta.status === 'indexing' ? 'Indexing' : 'Uploaded',
           ],
-          entities: [],
+          entities,
           streamUrl: r.stream_url || undefined,
           thumbnailUrl: r.thumbnail_url || undefined,
           durationSeconds: dur ?? undefined,
           clips: Array.isArray(r.clips) ? r.clips : [],
           searchScore: r.score,
+          categories: Array.isArray(analysis?.categories) ? analysis.categories : undefined,
+          aboutTopics: Array.isArray(analysis?.topics) ? analysis.topics : undefined,
+          people: Array.isArray(analysis?.people) ? analysis.people : undefined,
+          riskLevel: validRisk,
+          detectedObjects: detectedObjects.length > 0 ? detectedObjects : undefined,
         }
       })
       const displayQuery = data.query ?? (hasQuery ? query : (hasEntities ? `Entity: ${searchAttachments.filter((a) => a.type === 'entity').map((a) => a.name).join(', ')}` : query))
@@ -1067,7 +1184,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
             </button>
             <button
               type="button"
-              onClick={() => { setViewMode('tabular'); setOpenFolderIdx(null) }}
+              onClick={() => { setViewMode('tabular'); setOpenFolderIdx(null); setTabularPage(1) }}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
                 viewMode === 'tabular'
                   ? 'bg-brand-charcoal text-brand-white'
@@ -1221,10 +1338,10 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
         </>
       )}
 
-      {/* ─── Tabular view (same table as Assets page) ─── */}
+      {/* ─── Tabular view (data from video analysis metadata) ─── */}
       {viewMode === 'tabular' && (
         <>
-          {filteredVideos.length === 0 ? (
+          {videosForTable.length === 0 ? (
             <p className="text-center text-gray-500 py-16">No videos match your search.</p>
           ) : (
             <div className="rounded-xl border border-border bg-surface overflow-hidden">
@@ -1238,6 +1355,12 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                       Upload date
                     </th>
                     <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Categories
+                    </th>
+                    <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      About topic
+                    </th>
+                    <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Risk level
                     </th>
                     <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -1249,7 +1372,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {filteredVideos.map((v) => (
+                  {paginatedTabularVideos.map((v) => (
                     <tr key={v.id} className="hover:bg-card/80 transition-colors">
                       <td className="px-4 py-3">
                         <Link
@@ -1263,10 +1386,16 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                         {v.uploadDate}
                       </td>
                       <td className="px-4 py-3">
-                        <PriorityTag priority="low" />
+                        <TagPills tags={v.categories ?? []} />
                       </td>
                       <td className="px-4 py-3">
-                        <TagPills tags={v.tags ?? [v.category]} />
+                        <TagPills tags={v.aboutTopics ?? []} />
+                      </td>
+                      <td className="px-4 py-3">
+                        <PriorityTag priority={(v.riskLevel ?? 'medium') as 'low' | 'medium' | 'high'} />
+                      </td>
+                      <td className="px-4 py-3">
+                        <TagPills tags={(v.tags ?? [v.category]).filter((t) => t !== 'Indexed')} />
                       </td>
                       <td className="px-4 py-3">
                         <EntityAvatars entities={v.entities ?? []} />
@@ -1275,6 +1404,34 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                   ))}
                 </tbody>
               </table>
+              <div className="flex items-center justify-between gap-4 px-4 py-3 border-t border-border bg-card">
+                <p className="text-sm text-gray-500 tabular-nums">
+                  Showing {(tabularPage - 1) * TABULAR_PAGE_SIZE + 1}–{Math.min(tabularPage * TABULAR_PAGE_SIZE, videosForTable.length)} of {videosForTable.length}
+                </p>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setTabularPage((p) => Math.max(1, p - 1))}
+                    disabled={tabularPage <= 1}
+                    className="inline-flex h-8 min-w-[2rem] items-center justify-center rounded-lg border border-border bg-surface px-2.5 text-sm font-medium text-text-primary shadow-sm transition-colors hover:bg-gray-50 disabled:pointer-events-none disabled:opacity-50"
+                    aria-label="Previous page"
+                  >
+                    Previous
+                  </button>
+                  <span className="flex h-8 items-center px-2 text-sm text-gray-500">
+                    Page {tabularPage} of {totalTabularPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setTabularPage((p) => Math.min(totalTabularPages, p + 1))}
+                    disabled={tabularPage >= totalTabularPages}
+                    className="inline-flex h-8 min-w-[2rem] items-center justify-center rounded-lg border border-border bg-surface px-2.5 text-sm font-medium text-text-primary shadow-sm transition-colors hover:bg-gray-50 disabled:pointer-events-none disabled:opacity-50"
+                    aria-label="Next page"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </>

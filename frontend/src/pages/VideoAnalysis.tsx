@@ -26,6 +26,7 @@ type VideoAnalysisData = {
   description: string
   categories: string[]
   topics: string[]
+  people: string[]
   riskLevel: 'high' | 'medium' | 'low'
   risks: Array<{ label: string; severity: 'high' | 'medium' | 'low'; timestamp?: string | null }>
   transcript: Array<{ time: string; text: string }>
@@ -36,6 +37,7 @@ const DEFAULT_VIDEO_PLACEHOLDER: VideoAnalysisData = {
   description: '',
   categories: [],
   topics: [],
+  people: [],
   riskLevel: 'medium',
   risks: [],
   transcript: [],
@@ -941,6 +943,7 @@ export default function VideoAnalysis() {
         description: rawAnalysis.description ?? '',
         categories: Array.isArray(rawAnalysis.categories) ? rawAnalysis.categories : [],
         topics: Array.isArray(rawAnalysis.topics) ? rawAnalysis.topics : [],
+        people: Array.isArray((rawAnalysis as { people?: string[] }).people) ? (rawAnalysis as { people: string[] }).people : [],
         riskLevel: ['high', 'medium', 'low'].includes(rawAnalysis.riskLevel) ? rawAnalysis.riskLevel : 'medium',
         risks: Array.isArray(rawAnalysis.risks)
           ? rawAnalysis.risks.map((r: any) => ({

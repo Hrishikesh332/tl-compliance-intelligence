@@ -8,7 +8,9 @@ from app.services.vector_store import FIXED_INDEX_ID, list_entries as index_list
 from app.utils.video_helpers import (
     get_search_embedding_from_request,
     clip_search,
-    best_clip_score,
+    best_clip_score_and_count,
+    clips_above_threshold,
+    entity_ranking_score,
     face_match_score_in_video,
     ENTITY_CLIP_MIN_SCORE,
 )
@@ -50,47 +52,40 @@ def api_search_videos():
                 if metadata_filter and not all(meta.get(k) == v for k, v in metadata_filter.items()):
                     continue
                 try:
-                    best_sc = best_clip_score(query_emb, output_uri, visual_only=True)
+                    best_sc, match_count, top_k_avg = best_clip_score_and_count(
+                        query_emb, output_uri, ENTITY_CLIP_MIN_SCORE, visual_only=True
+                    )
                 except Exception:
-                    best_sc = 0.0
+                    best_sc, match_count, top_k_avg = 0.0, 0, 0.0
                 if best_sc < ENTITY_CLIP_MIN_SCORE:
                     continue
-                candidates.append({"id": rec["id"], "score": best_sc, "metadata": meta})
+                rank_score = entity_ranking_score(best_sc, match_count, top_k_avg)
+                candidates.append({
+                    "id": rec["id"],
+                    "score": rank_score,
+                    "best_clip_score": best_sc,
+                    "metadata": meta,
+                    "output_uri": output_uri,
+                })
             candidates.sort(key=lambda x: -x["score"])
-            # Re-rank by face-only matching: extract faces from video frames and compare to entity
-            video_ids_to_rerank = [c["id"] for c in candidates[: max(top_k * 2, 20)]]
-            face_scores_and_clips: dict[str, tuple[float, list]] = {}
-            for vid in video_ids_to_rerank:
-                rec = next((r for r in candidates if r["id"] == vid), None)
-                if not rec:
-                    continue
-                output_uri = rec.get("metadata", {}).get("output_s3_uri") or f"{S3_EMBEDDINGS_OUTPUT}/{vid}"
+            # Re-rank by actual face match: always use face score when we have it so wrong
+            # videos (low face score) drop; only show segments when match is confident.
+            max_verify = min(16, len(candidates))
+            for c in candidates[:max_verify]:
                 try:
                     face_score, face_clips = face_match_score_in_video(
-                        query_emb, vid, output_uri, max_frames=10
+                        query_emb, c["id"], c["output_uri"], max_frames=6
                     )
-                    face_scores_and_clips[vid] = (face_score, face_clips)
-                except Exception:
-                    face_scores_and_clips[vid] = (rec["score"], [])
-            # Use face-match score when we have it; fall back to clip score
-            def entity_score(c):
-                vid = c["id"]
-                face_score, _ = face_scores_and_clips.get(vid, (0.0, []))
-                return face_score if face_score >= ENTITY_CLIP_MIN_SCORE else c["score"]
-            candidates_reranked = sorted(
-                [c for c in candidates if c["id"] in face_scores_and_clips],
-                key=lambda x: -entity_score(x),
+                    c["score"] = face_score
+                    c["face_clips"] = face_clips if face_score >= 0.40 else []
+                except Exception as e:
+                    log.warning("[SEARCH] Face verify failed for %s: %s", c["id"], e)
+                    c["score"] = 0.0
+                    c["face_clips"] = []
+            candidates[:max_verify] = sorted(
+                candidates[:max_verify], key=lambda x: -x["score"]
             )
-            # Include any remaining candidates that weren’t re-scored (by original score)
-            remaining = [c for c in candidates if c["id"] not in face_scores_and_clips]
-            results = candidates_reranked + remaining
-            results = results[:top_k]
-            # Attach face score and face-matched clips to each result for response
-            for c in results:
-                vid = c["id"]
-                face_score, face_clips = face_scores_and_clips.get(vid, (0.0, []))
-                c["score"] = face_score if face_score >= ENTITY_CLIP_MIN_SCORE else c["score"]
-                c["face_clips"] = face_clips if face_score >= ENTITY_CLIP_MIN_SCORE else []
+            results = candidates[:top_k]
         else:
             results = index_search(
                 query_emb,
@@ -110,9 +105,23 @@ def api_search_videos():
                 except Exception:
                     pass
             clips = []
-            if is_entity_search and r.get("face_clips") is not None:
-                clips = r["face_clips"][:clips_per_video]
-            else:
+            if is_entity_search:
+                if r.get("face_clips"):
+                    clips = r["face_clips"][:50]
+                else:
+                    output_uri = meta.get("output_s3_uri") or (f"{S3_EMBEDDINGS_OUTPUT}/{r['id']}" if r.get("id") else None)
+                    if output_uri and meta.get("status") == "ready":
+                        try:
+                            clips = clips_above_threshold(
+                                query_emb,
+                                output_uri,
+                                min_score=ENTITY_CLIP_MIN_SCORE,
+                                visual_only=True,
+                                max_clips=50,
+                            )
+                        except Exception:
+                            pass
+            if not clips:
                 output_uri = meta.get("output_s3_uri") or (f"{S3_EMBEDDINGS_OUTPUT}/{r['id']}" if r.get("id") else None)
                 if output_uri and meta.get("status") == "ready":
                     try:
