@@ -155,14 +155,6 @@ function IconGrid({ className = 'w-4 h-4' }: { className?: string }) {
   )
 }
 
-function IconFolder({ className = 'w-4 h-4' }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 12 10" fill="currentColor">
-      <path fillRule="evenodd" clipRule="evenodd" d="M11 8.66667V2.58333C11 2.39924 10.8508 2.25 10.6667 2.25H6.41756C5.9418 2.25 5.47741 2.10457 5.08664 1.8332L3.97257 1.05954C3.91675 1.02078 3.85041 1 3.78244 1H1.33333C1.14924 1 1 1.14924 1 1.33333V8.66667C1 8.85076 1.14924 9 1.33333 9H10.6667C10.8508 9 11 8.85076 11 8.66667ZM12 8.66667V2.58333C12 1.84695 11.403 1.25 10.6667 1.25H6.41756C6.1457 1.25 5.88033 1.1669 5.65703 1.01183L4.54297 0.238173C4.31967 0.0831044 4.0543 0 3.78244 0H1.33333C0.596955 0 0 0.596954 0 1.33333V8.66667C0 9.40305 0.596954 10 1.33333 10H10.6667C11.403 10 12 9.40305 12 8.66667Z" />
-    </svg>
-  )
-}
-
 function IconList({ className = 'w-4 h-4' }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 12 12" fill="currentColor">
@@ -319,16 +311,6 @@ function clipScoreColor(score: number): string {
 
 const SAMPLE_VIDEOS: VideoItem[] = [
   { id: 'abc123', title: 'Officer_patrol_downtown.mp4', uploadDate: '03-15-2024', duration: '00:02:19', totalMinutes: 2, category: 'BodyCam', tags: ['BodyCam', 'Patrol', 'Unit 7'], entities: [{ id: 'e1', name: 'Karen Nelson', imageUrl: 'https://picsum.photos/128/128?random=1', initials: 'KN' }, { id: 'e2', name: 'Esther Howard', imageUrl: 'https://picsum.photos/128/128?random=2', initials: 'EH' }, { id: 'e3', name: 'Robert Fox', initials: 'RF' }] },
-]
-
-type FolderItem = {
-  name: string
-  category: string
-  videoIds: string[]
-}
-
-const SAMPLE_FOLDERS: FolderItem[] = [
-  { name: 'BodyCam — Unit 7 Patrols', category: 'BodyCam', videoIds: ['abc123'] },
 ]
 
 const TOTAL_CAPACITY = 100
@@ -517,8 +499,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [sortBy, setSortBy] = useState<'recent' | 'name'>('recent')
   const [activeCategory, setActiveCategory] = useState<string>('All')
-  const [viewMode, setViewMode] = useState<'videos' | 'folders' | 'tabular'>('videos')
-  const [openFolderIdx, setOpenFolderIdx] = useState<number | null>(null)
+  const [viewMode, setViewMode] = useState<'videos' | 'tabular'>('videos')
   const [tabularPage, setTabularPage] = useState(1)
   const TABULAR_PAGE_SIZE = 4
   const { videos: cachedVideos } = useVideoCache()
@@ -733,34 +714,6 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
   useEffect(() => {
     if (viewMode === 'tabular' && tabularPage > totalTabularPages) setTabularPage(1)
   }, [viewMode, tabularPage, totalTabularPages])
-
-  const dynamicFolders = useMemo(() => {
-    const tagMap: Record<string, string[]> = {}
-    for (const v of apiVideos) {
-      const tags = v.tags || []
-      for (const t of tags) {
-        const key = t.toLowerCase()
-        if (['indexed', 'indexing', 'uploaded'].includes(key)) continue
-        if (!tagMap[key]) tagMap[key] = []
-        if (!tagMap[key].includes(v.id)) tagMap[key].push(v.id)
-      }
-    }
-    return Object.entries(tagMap).map(([tag, ids]) => ({
-      name: tag.charAt(0).toUpperCase() + tag.slice(1),
-      category: tag.charAt(0).toUpperCase() + tag.slice(1),
-      videoIds: ids,
-    }))
-  }, [apiVideos])
-
-  const allFolders = useMemo(() => [...SAMPLE_FOLDERS, ...dynamicFolders], [dynamicFolders])
-
-  const filteredFolders = useMemo(() => {
-    let list = allFolders
-    if (activeCategory !== 'All') {
-      list = list.filter((f) => f.category.toLowerCase() === activeCategory.toLowerCase())
-    }
-    return list
-  }, [allFolders, activeCategory])
 
   async function handleSearch(overrideQuery?: string) {
     const query = (overrideQuery ?? searchQuery).trim()
@@ -1140,7 +1093,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
           <button
             key={cat}
             type="button"
-            onClick={() => { setActiveCategory(cat); setOpenFolderIdx(null) }}
+            onClick={() => setActiveCategory(cat)}
             aria-pressed={activeCategory === cat}
             className={`px-4 py-1.5 rounded-full text-sm font-medium border transition-colors ${
               activeCategory === cat
@@ -1160,7 +1113,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
           <div className="flex items-center rounded-lg border border-border bg-surface p-0.5">
             <button
               type="button"
-              onClick={() => { setViewMode('videos'); setOpenFolderIdx(null) }}
+              onClick={() => setViewMode('videos')}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
                 viewMode === 'videos'
                   ? 'bg-brand-charcoal text-brand-white'
@@ -1172,19 +1125,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
             </button>
             <button
               type="button"
-              onClick={() => { setViewMode('folders'); setOpenFolderIdx(null) }}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                viewMode === 'folders'
-                  ? 'bg-brand-charcoal text-brand-white'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              <IconFolder className="w-3.5 h-3.5" />
-              Folders
-            </button>
-            <button
-              type="button"
-              onClick={() => { setViewMode('tabular'); setOpenFolderIdx(null); setTabularPage(1) }}
+              onClick={() => { setViewMode('tabular'); setTabularPage(1) }}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
                 viewMode === 'tabular'
                   ? 'bg-brand-charcoal text-brand-white'
@@ -1431,155 +1372,6 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                     Next
                   </button>
                 </div>
-              </div>
-            </div>
-          )}
-        </>
-      )}
-
-      {/* ─── Folders view ─── */}
-      {viewMode === 'folders' && (
-        <>
-          {openFolderIdx === null ? (
-            /* Folder grid */
-            filteredFolders.length === 0 ? (
-              <p className="text-center text-gray-500 py-16">No folders match your search.</p>
-            ) : (
-              <div className="dashboard-video-grid">
-                {filteredFolders.map((folder, idx) => {
-                  const folderVideos = allVideos.filter((v) => folder.videoIds.includes(v.id))
-                  return (
-                    <button
-                      key={folder.name}
-                      type="button"
-                      onClick={() => setOpenFolderIdx(idx)}
-                      className="group text-left rounded-xl border border-border bg-surface shadow-sm hover:border-border-light hover:shadow-md transition-all duration-200 overflow-hidden focus:outline-none focus:ring-2 focus:ring-accent/30 min-w-0"
-                    >
-                      {/* Folder thumbnail — mini grid preview */}
-                      <div className="aspect-video bg-card p-3 flex items-center justify-center">
-                        <div className="grid grid-cols-2 gap-1.5 w-full h-full">
-                          {folderVideos.slice(0, 4).map((v) => (
-                            <div key={v.id} className="rounded-md bg-brand-charcoal flex items-center justify-center overflow-hidden relative">
-                              {v.thumbnailUrl ? (
-                                <img
-                                  src={v.thumbnailUrl}
-                                  alt={v.title}
-                                  loading="lazy"
-                                  decoding="async"
-                                  className="absolute inset-0 w-full h-full object-cover"
-                                />
-                              ) : (
-                                <IconPlay className="w-3.5 h-3.5 text-white/40" />
-                              )}
-                            </div>
-                          ))}
-                          {folderVideos.length < 4 &&
-                            Array.from({ length: 4 - folderVideos.length }).map((_, i) => (
-                              <div key={`empty-${i}`} className="rounded-md bg-gray-100" />
-                            ))}
-                        </div>
-                      </div>
-                      <div className="p-4">
-                        <div className="flex items-center gap-2 mb-1">
-                          <IconFolder className="w-4 h-4 text-gray-400" />
-                          <p className="text-sm font-medium text-text-primary truncate group-hover:text-accent transition-colors">
-                            {folder.name}
-                          </p>
-                        </div>
-                        <p className="text-xs text-gray-500">{folderVideos.length} video{folderVideos.length !== 1 ? 's' : ''}, {folder.category}</p>
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            )
-          ) : (
-            /* Inside a folder — show videos */
-            <div>
-              <button
-                type="button"
-                onClick={() => setOpenFolderIdx(null)}
-                className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-4 transition-colors"
-              >
-                <svg className="w-4 h-4 rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-                Back to folders
-              </button>
-              <div className="flex items-center gap-2 mb-4">
-                <IconFolder className="w-5 h-5 text-gray-500" />
-                <h3 className="text-lg font-semibold text-text-primary">{filteredFolders[openFolderIdx].name}</h3>
-                <span className="text-sm text-gray-400">
-                  {filteredFolders[openFolderIdx].videoIds.length} video{filteredFolders[openFolderIdx].videoIds.length !== 1 ? 's' : ''}
-                </span>
-              </div>
-              <div className="dashboard-video-grid">
-                {allVideos.filter((v) =>
-                  filteredFolders[openFolderIdx].videoIds.includes(v.id)
-                ).map((v) => (
-                  <Link
-                    key={v.id}
-                    to={`/video/${v.id}`}
-                    className="group block focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-xl min-w-0"
-                  >
-                    <div className="relative aspect-video rounded-xl overflow-hidden bg-brand-charcoal">
-                      {v.thumbnailUrl ? (
-                        <img
-                          src={v.thumbnailUrl}
-                          alt={v.title}
-                          loading="lazy"
-                          decoding="async"
-                          className="absolute inset-0 w-full h-full object-cover brightness-105"
-                        />
-                      ) : v.streamUrl ? (
-                        <video
-                          src={v.streamUrl}
-                          className="absolute inset-0 w-full h-full object-cover brightness-105"
-                          muted
-                          playsInline
-                          preload="metadata"
-                          data-video-id={v.id}
-                          onLoadedMetadata={v.durationSeconds != null ? undefined : (e) => {
-                            const el = e.currentTarget
-                            const id = el.dataset.videoId
-                            if (id && Number.isFinite(el.duration)) {
-                              setVideoDurations((prev) => (prev[id] === el.duration ? prev : { ...prev, [id]: el.duration }))
-                            }
-                          }}
-                        />
-                      ) : null}
-                      {v.thumbnailUrl && v.durationSeconds == null && v.streamUrl ? (
-                        <video
-                          src={v.streamUrl}
-                          className="absolute w-0 h-0 opacity-0 pointer-events-none"
-                          preload="metadata"
-                          data-video-id={v.id}
-                          onLoadedMetadata={(e) => {
-                            const el = e.currentTarget
-                            const id = el.dataset.videoId
-                            if (id && Number.isFinite(el.duration)) {
-                              setVideoDurations((prev) => (prev[id] === el.duration ? prev : { ...prev, [id]: el.duration }))
-                            }
-                          }}
-                        />
-                      ) : null}
-                      <div className="absolute inset-0 flex items-center justify-center bg-transparent group-hover:bg-brand-charcoal/40 z-[2] pointer-events-none transition-colors duration-200">
-                        <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                          <IconPlay className="w-5 h-5 text-white ml-0.5" />
-                        </div>
-                      </div>
-                      <span className="absolute left-1/2 -translate-x-1/2 bottom-1.5 px-3 py-1 text-sm font-mono font-medium text-white rounded border border-white/90 tabular-nums bg-black/50 [text-shadow:0_0_2px_rgba(0,0,0,0.9)]">
-                        {videoDurations[v.id] != null ? formatSecondsToTimestamp(videoDurations[v.id]) : v.duration}
-                      </span>
-                    </div>
-                    <p className="mt-2.5 text-sm text-text-secondary truncate group-hover:text-text-primary transition-colors">
-                      {v.title}
-                    </p>
-                    <p className="mt-0.5 text-sm text-text-tertiary tabular-nums">
-                      {videoDurations[v.id] != null ? formatDurationShort(formatSecondsToTimestamp(videoDurations[v.id])) : v.duration !== '—' ? formatDurationShort(v.duration) : '—'}
-                    </p>
-                  </Link>
-                ))}
               </div>
             </div>
           )}
