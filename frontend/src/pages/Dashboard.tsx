@@ -7,7 +7,7 @@ import searchIconUrl from '../../strand/icons/search.svg?url'
 import spinnerIconUrl from '../../strand/icons/spinner.svg?url'
 import arrowBoxUpIconUrl from '../../strand/icons/arrow-box-up.svg?url'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+import { API_BASE } from '../config'
 
 type SearchAttachment = {
   id: string

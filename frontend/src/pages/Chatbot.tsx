@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useLayoutEffect, type FormEvent } from 're
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+import { API_BASE } from '../config'
 
 function IconChevronDown({ className = 'w-3.5 h-3.5' }: { className?: string }) {
   return (

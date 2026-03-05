@@ -14,7 +14,7 @@ import transcriptionIconUrl from '../../strand/icons/transcription.svg?url'
 import checkmarkIconUrl from '../../strand/icons/checkmark.svg?url'
 import spinnerIconUrl from '../../strand/icons/spinner.svg?url'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+import { API_BASE } from '../config'
 
 function toTitleCase(s: string): string {
   return s.replace(/\b\w/g, (c) => c.toUpperCase())

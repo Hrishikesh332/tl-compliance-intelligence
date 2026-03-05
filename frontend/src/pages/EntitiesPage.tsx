@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import AddEntityModal from '../components/AddEntityModal'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+import { API_BASE } from '../config'
 
 type Entity = {
   id: string

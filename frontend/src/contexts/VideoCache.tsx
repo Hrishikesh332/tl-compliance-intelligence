@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, type ReactNode } from 'react'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+import { API_BASE } from '../config'
 
 const CACHE_KEY = 'vc_video_cache'
 const CACHE_STALE_MS = 60_000
