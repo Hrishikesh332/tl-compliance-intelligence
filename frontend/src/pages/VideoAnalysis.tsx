@@ -2012,17 +2012,28 @@ export default function VideoAnalysis() {
                 const incomplete = segments.length > 0 && videoDurationSec > 0 && Number.isFinite(lastSec) && lastSec < videoDurationSec - 30
                 return (
                   <>
-                    {visible.map((line, i) => (
-                      <li
-                        key={i}
-                        className="flex gap-3 px-3 sm:px-4 py-3 hover:bg-card transition-colors duration-150 cursor-pointer"
-                      >
-                        <span className="text-xs font-mono text-accent font-medium shrink-0 pt-0.5 w-9">
-                          {line.time}
-                        </span>
-                        <p className="text-sm text-gray-600 leading-relaxed">{line.text}</p>
-                      </li>
-                    ))}
+                    {visible.map((line, i) => {
+                      const seekSeconds = parseTimestampToSeconds(line.time)
+                      const handleSeek = () => {
+                        if (!Number.isFinite(seekSeconds)) return
+                        const player = playerRef.current
+                        if (player) player.seekTo(seekSeconds)
+                      }
+                      return (
+                        <li key={i} className="list-none">
+                          <button
+                            type="button"
+                            onClick={handleSeek}
+                            className="flex gap-3 px-3 sm:px-4 py-3 hover:bg-card transition-colors duration-150 cursor-pointer w-full text-left border-0 bg-transparent"
+                          >
+                            <span className="text-xs font-mono text-accent font-medium shrink-0 pt-0.5 w-9">
+                              {line.time}
+                            </span>
+                            <span className="text-sm text-gray-600 leading-relaxed">{line.text}</span>
+                          </button>
+                        </li>
+                      )
+                    })}
                     {incomplete && last && (
                       <li className="border-t border-gray-100 px-3 sm:px-4 py-3 flex flex-col items-stretch gap-2 list-none">
                         {appendTranscriptError && (
