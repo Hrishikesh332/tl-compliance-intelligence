@@ -982,6 +982,27 @@ export default function VideoAnalysis() {
     }
   }
 
+  /** Append transcript from the last segment timestamp to the end of the video. */
+  async function appendTranscriptFrom(lastSegmentSeconds: number) {
+    if (!videoId || lastSegmentSeconds < 0) return
+    setAppendTranscriptError(null)
+    setAppendTranscriptLoading(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/videos/${encodeURIComponent(videoId)}/transcript`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ append_from_seconds: lastSegmentSeconds }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`)
+      await refreshCache(true)
+    } catch (e: any) {
+      setAppendTranscriptError(e?.message ?? 'Failed to append transcript')
+    } finally {
+      setAppendTranscriptLoading(false)
+    }
+  }
+
   const stableUrlRef = useRef<{ id: string; url: string }>({ id: '', url: '' })
   const videoStreamUrl = (() => {
     const freshUrl = cachedVideo?.stream_url || ''
@@ -1034,6 +1055,8 @@ export default function VideoAnalysis() {
   const [editingPersonId, setEditingPersonId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
   const [showAllTranscript, setShowAllTranscript] = useState(false)
+  const [appendTranscriptLoading, setAppendTranscriptLoading] = useState(false)
+  const [appendTranscriptError, setAppendTranscriptError] = useState<string | null>(null)
   const playerRef = useRef<VideoPlayerHandle>(null)
   const sidebarPlayerRef = useRef<VideoPlayerHandle>(null)
   const [chatPanelOpen, setChatPanelOpen] = useState(false)
@@ -1984,17 +2007,51 @@ export default function VideoAnalysis() {
               {(() => {
                 const segments = videoAnalysis.transcript
                 const visible = (isLgViewport || showAllTranscript) ? segments : segments.slice(0, 2)
-                return visible.map((line, i) => (
-                  <li
-                    key={i}
-                    className="flex gap-3 px-3 sm:px-4 py-3 hover:bg-card transition-colors duration-150 cursor-pointer"
-                  >
-                    <span className="text-xs font-mono text-accent font-medium shrink-0 pt-0.5 w-9">
-                      {line.time}
-                    </span>
-                    <p className="text-sm text-gray-600 leading-relaxed">{line.text}</p>
-                  </li>
-                ))
+                const last = segments.length > 0 ? segments[segments.length - 1] : null
+                const lastSec = last ? parseTimestampToSeconds(last.time) : NaN
+                const incomplete = segments.length > 0 && videoDurationSec > 0 && Number.isFinite(lastSec) && lastSec < videoDurationSec - 30
+                return (
+                  <>
+                    {visible.map((line, i) => (
+                      <li
+                        key={i}
+                        className="flex gap-3 px-3 sm:px-4 py-3 hover:bg-card transition-colors duration-150 cursor-pointer"
+                      >
+                        <span className="text-xs font-mono text-accent font-medium shrink-0 pt-0.5 w-9">
+                          {line.time}
+                        </span>
+                        <p className="text-sm text-gray-600 leading-relaxed">{line.text}</p>
+                      </li>
+                    ))}
+                    {incomplete && last && (
+                      <li className="border-t border-gray-100 px-3 sm:px-4 py-3 flex flex-col items-stretch gap-2 list-none">
+                        {appendTranscriptError && (
+                          <p className="text-sm text-error text-center w-full" role="alert">{appendTranscriptError}</p>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => appendTranscriptFrom(lastSec)}
+                          disabled={appendTranscriptLoading}
+                          className="inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-accent hover:bg-accent/5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed w-full sm:w-auto self-center"
+                        >
+                          {appendTranscriptLoading ? (
+                            <>
+                              <img src={spinnerIconUrl} alt="" className="w-4 h-4 animate-spin shrink-0" aria-hidden />
+                              Appending…
+                            </>
+                          ) : (
+                            <>
+                              <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                              </svg>
+                              Append transcript from {last.time} to end
+                            </>
+                          )}
+                        </button>
+                      </li>
+                    )}
+                  </>
+                )
               })()}
             </ul>
             {videoAnalysis.transcript.length > 2 && !isLgViewport && (

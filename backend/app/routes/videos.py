@@ -25,6 +25,7 @@ from app.utils.video_helpers import (
     normalize_video_analysis,
     TRANSCRIPT_PROMPT,
     parse_transcript_response,
+    _timestamp_seconds_for_sort,
     DETECT_PROMPT,
     parse_detect_response,
     save_face_to_disk,
@@ -287,24 +288,49 @@ def api_video_transcript(video_id: str):
             return jsonify({"video_id": video_id, "transcript": None, "message": "No transcript yet. Use POST to generate."}), 200
         return jsonify({"video_id": video_id, "transcript": existing_transcript, "count": len(existing_transcript)})
 
-    # POST: generate transcript
+    # POST: generate transcript (optionally append from a given timestamp)
+    body = request.get_json(silent=True) or {}
+    append_from_seconds = body.get("append_from_seconds")
+    if append_from_seconds is not None:
+        try:
+            append_from_seconds = float(append_from_seconds)
+            if append_from_seconds < 0:
+                append_from_seconds = None
+        except (TypeError, ValueError):
+            append_from_seconds = None
+    if append_from_seconds is not None and not existing_transcript:
+        append_from_seconds = None  # no existing transcript to append to
+
     s3_uri = video_id_to_s3_uri(video_id)
     if not s3_uri:
         return jsonify({"error": "Video has no S3 location", "video_id": video_id}), 400
-    log.info("[TRANSCRIPT] Generating detailed transcript for video_id=%s", video_id)
+    log.info(
+        "[TRANSCRIPT] Generating detailed transcript for video_id=%s%s",
+        video_id,
+        " (append from %.0fs)" % append_from_seconds if append_from_seconds is not None else "",
+    )
     try:
         t0 = _time.perf_counter()
         raw = pegasus_analyze_video(s3_uri, TRANSCRIPT_PROMPT)
         log.info("[TRANSCRIPT] Pegasus response received in %.1fs (%d chars)", _time.perf_counter() - t0, len(raw or ""))
-        transcript = parse_transcript_response(raw)
-        if not transcript:
+        new_segments = parse_transcript_response(raw)
+        if not new_segments:
             log.warning("[TRANSCRIPT] No segments parsed from response")
             return jsonify({
                 "error": "Could not parse transcript from response",
                 "video_id": video_id,
                 "raw_preview": (raw[:500] + "..." if raw and len(raw) > 500 else raw or ""),
             }), 422
-        log.info("[TRANSCRIPT] Parsed %d segments", len(transcript))
+        log.info("[TRANSCRIPT] Parsed %d segments", len(new_segments))
+        # If appending: keep existing segments before append_from_seconds, add new segments from that time onward
+        if append_from_seconds is not None:
+            kept = [s for s in existing_transcript if _timestamp_seconds_for_sort(s.get("time") or "0:00") < append_from_seconds]
+            appended = [s for s in new_segments if _timestamp_seconds_for_sort(s.get("time") or "0:00") >= append_from_seconds]
+            transcript = kept + appended
+            transcript.sort(key=lambda s: _timestamp_seconds_for_sort(s.get("time") or "0:00"))
+            log.info("[TRANSCRIPT] Merged: %d kept + %d appended = %d total", len(kept), len(appended), len(transcript))
+        else:
+            transcript = new_segments
         # Merge into video_analysis
         updated_analysis = {**existing_analysis, "transcript": transcript}
         idx = vs_index()
