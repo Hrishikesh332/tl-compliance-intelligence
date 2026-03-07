@@ -144,10 +144,20 @@ def upload_document(file_bytes: bytes, filename: str) -> dict:
 
 _pipeline_started = False
 
+# Set when nv-ingest is missing (e.g. on Render where ray has no wheels).
+_NV_INGEST_UNAVAILABLE: str | None = None
+
+
+def _check_nv_ingest() -> None:
+    """Raise if nv-ingest stack is not installed (optional dependency)."""
+    if _NV_INGEST_UNAVAILABLE:
+        raise RuntimeError(_NV_INGEST_UNAVAILABLE)
+
 
 def _ensure_pipeline() -> None:
     """Start the NeMo Retriever Ray pipeline subprocess (lazy, once)."""
-    global _pipeline_started
+    global _pipeline_started, _NV_INGEST_UNAVAILABLE
+    _check_nv_ingest()
     if _pipeline_started:
         return
     try:
@@ -162,6 +172,15 @@ def _ensure_pipeline() -> None:
         )
         _pipeline_started = True
         log.info("NeMo Retriever pipeline started")
+    except ImportError as exc:
+        global _NV_INGEST_UNAVAILABLE
+        _NV_INGEST_UNAVAILABLE = (
+            "Document extraction requires the optional nv-ingest stack (ray/nv-ingest), "
+            "which is not installed on this environment. For cloud deploy use the main "
+            "requirements.txt; for local doc ingestion install: pip install -r requirements-optional.txt"
+        )
+        log.warning("nv-ingest not available: %s", exc)
+        raise RuntimeError(_NV_INGEST_UNAVAILABLE) from exc
     except Exception as exc:
         log.error("Failed to start NeMo pipeline: %s", exc)
         raise
@@ -175,9 +194,19 @@ def extract_document(file_path: str) -> list[str]:
     """
     _ensure_pipeline()
 
-    from nv_ingest_client.client import Ingestor, NvIngestClient
-    from nv_ingest_api.util.message_brokers.simple_message_broker import SimpleClient
-    from nv_ingest_client.util.process_json_files import ingest_json_results_to_blob
+    try:
+        from nv_ingest_client.client import Ingestor, NvIngestClient
+        from nv_ingest_api.util.message_brokers.simple_message_broker import SimpleClient
+        from nv_ingest_client.util.process_json_files import ingest_json_results_to_blob
+    except ImportError as exc:
+        global _NV_INGEST_UNAVAILABLE
+        if _NV_INGEST_UNAVAILABLE is None:
+            _NV_INGEST_UNAVAILABLE = (
+                "Document extraction requires the optional nv-ingest stack (ray/nv-ingest), "
+                "which is not installed on this environment. For cloud deploy use the main "
+                "requirements.txt; for local doc ingestion install: pip install -r requirements-optional.txt"
+            )
+        raise RuntimeError(_NV_INGEST_UNAVAILABLE) from exc
 
     client = NvIngestClient(
         message_client_allocator=SimpleClient,

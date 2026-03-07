@@ -137,16 +137,17 @@ def start_video_embedding(
 def get_async_invocation(invocation_arn: str) -> dict:
     client = _bedrock_client()
     resp = client.get_async_invoke(invocationArn=invocation_arn)
-    status = resp.get("status", "unknown")
+    raw_status = resp.get("status", "unknown")
     result = {
         "invocation_arn": invocation_arn,
-        "status": status,
+        "status": raw_status.lower() if isinstance(raw_status, str) else "unknown",
     }
     output_config = resp.get("outputDataConfig", {}).get("s3OutputDataConfig", {})
     if output_config:
         result["output_s3_uri"] = output_config.get("s3Uri", "")
-    if resp.get("failureMessage"):
-        result["error"] = resp["failureMessage"]
+    failure_msg = resp.get("failureMessage") or resp.get("failureReason")
+    if failure_msg:
+        result["error"] = str(failure_msg)
     return result
 
 
