@@ -1203,6 +1203,14 @@ export default function VideoAnalysis() {
   const navState = (location.state || {}) as { searchClips?: ClipMatch[]; searchScore?: number; searchQuery?: string }
   const { getVideo, refresh: refreshCache } = useVideoCache()
 
+  // Track mount state so async work (fetches, timeouts, video events) can safely bail out after unmount.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
   const { searchClips, searchQuery, hasSearchContext } = (() => {
     if (navState.searchClips && navState.searchClips.length > 0) {
       return {
@@ -1260,26 +1268,28 @@ export default function VideoAnalysis() {
 
   async function generateAnalysis() {
     if (!videoId) return
+    if (!mountedRef.current) return
     setAnalysisError(null)
     setGeneratingAnalysis(true)
     try {
       const res = await fetch(`${API_BASE}/api/videos/${encodeURIComponent(videoId)}/analysis`, { method: 'POST' })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setAnalysisError(data?.error ?? `HTTP ${res.status}`)
+        if (mountedRef.current) setAnalysisError(data?.error ?? `HTTP ${res.status}`)
         return
       }
       await refreshCache(true)
     } catch (e: any) {
-      setAnalysisError(e?.message ?? 'Request failed')
+      if (mountedRef.current) setAnalysisError(e?.message ?? 'Request failed')
     } finally {
-      setGeneratingAnalysis(false)
+      if (mountedRef.current) setGeneratingAnalysis(false)
     }
   }
 
   /** Append transcript from the last segment timestamp to the end of the video. */
   async function appendTranscriptFrom(lastSegmentSeconds: number) {
     if (!videoId || lastSegmentSeconds < 0) return
+    if (!mountedRef.current) return
     setAppendTranscriptError(null)
     setAppendTranscriptLoading(true)
     try {
@@ -1292,9 +1302,9 @@ export default function VideoAnalysis() {
       if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`)
       await refreshCache(true)
     } catch (e: any) {
-      setAppendTranscriptError(e?.message ?? 'Failed to append transcript')
+      if (mountedRef.current) setAppendTranscriptError(e?.message ?? 'Failed to append transcript')
     } finally {
-      setAppendTranscriptLoading(false)
+      if (mountedRef.current) setAppendTranscriptLoading(false)
     }
   }
 
@@ -1423,32 +1433,35 @@ export default function VideoAnalysis() {
 
   async function generateInsights() {
     if (!videoId) return
+    if (!mountedRef.current) return
     setInsightsError(null)
     setGeneratingInsights(true)
     try {
       const res = await fetch(`${API_BASE}/api/videos/${encodeURIComponent(videoId)}/insights`, { method: 'POST' })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`)
-      if (data.insights) setInsights(data.insights)
+      if (mountedRef.current && data.insights) setInsights(data.insights)
     } catch (e: any) {
-      setInsightsError(e?.message ?? 'Failed to generate insights')
+      if (mountedRef.current) setInsightsError(e?.message ?? 'Failed to generate insights')
     } finally {
-      setGeneratingInsights(false)
+      if (mountedRef.current) setGeneratingInsights(false)
     }
   }
 
   /** Single entry point: run content analysis then people/objects insights; updates analysisStep for UI */
   async function runFullAnalysis() {
     if (!videoId) return
+    if (!mountedRef.current) return
     setAnalysisError(null)
     setInsightsError(null)
     setAnalysisStep(1)
     try {
       await generateAnalysis()
+      if (!mountedRef.current) return
       setAnalysisStep(2)
       await generateInsights()
     } finally {
-      setAnalysisStep(0)
+      if (mountedRef.current) setAnalysisStep(0)
     }
   }
 
