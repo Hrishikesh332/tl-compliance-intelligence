@@ -1370,6 +1370,7 @@ export default function VideoAnalysis() {
 
   useEffect(() => {
     if (!videoId) return
+    let aborted = false
     setInsightsLoading(true)
     setInsightsError(null)
     fetch(`${API_BASE}/api/videos/${encodeURIComponent(videoId)}/insights`)
@@ -1379,14 +1380,19 @@ export default function VideoAnalysis() {
         throw new Error(r.statusText || 'Failed to fetch insights')
       })
       .then((data) => {
+        if (aborted) return
         if (data?.insights) setInsights(data.insights)
         else setInsights(null)
       })
       .catch((e) => {
+        if (aborted) return
         setInsightsError(e?.message ?? 'Failed to load insights')
         setInsights(null)
       })
-      .finally(() => setInsightsLoading(false))
+      .finally(() => {
+        if (!aborted) setInsightsLoading(false)
+      })
+    return () => { aborted = true }
   }, [videoId])
 
   // Fetch accurate face presence timeline (separate API) when we have detected faces
@@ -1395,11 +1401,13 @@ export default function VideoAnalysis() {
       setFacePresence(null)
       return
     }
+    let aborted = false
     setFacePresenceLoading(true)
     setFacePresence(null)
     fetch(`${API_BASE}/api/videos/${encodeURIComponent(videoId)}/face-presence`)
       .then((r) => r.json())
       .then((data) => {
+        if (aborted) return
         if (data?.presence && Array.isArray(data.presence) && data.presence.length === detectedFaces.length) {
           setFacePresence({
             duration_sec: data.duration_sec ?? videoDurationSec,
@@ -1408,8 +1416,9 @@ export default function VideoAnalysis() {
           })
         }
       })
-      .catch(() => setFacePresence(null))
-      .finally(() => setFacePresenceLoading(false))
+      .catch(() => { if (!aborted) setFacePresence(null) })
+      .finally(() => { if (!aborted) setFacePresenceLoading(false) })
+    return () => { aborted = true }
   }, [videoId, detectedFaces.length, insights])
 
   async function generateInsights() {
@@ -1462,10 +1471,12 @@ export default function VideoAnalysis() {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
+    let aborted = false
     setClipThumbnails({})
     const clips = searchClips
 
     const onSeeked = () => {
+      if (aborted) return
       const i = captureIndexRef.current
       if (i >= clips.length) return
       if (video.videoWidth && video.videoHeight) {
@@ -1474,11 +1485,12 @@ export default function VideoAnalysis() {
         ctx.drawImage(video, 0, 0)
         try {
           const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
-          setClipThumbnails((prev) => ({ ...prev, [i]: dataUrl }))
+          if (!aborted) setClipThumbnails((prev) => ({ ...prev, [i]: dataUrl }))
         } catch {
           // ignore
         }
       }
+      if (aborted) return
       const next = i + 1
       if (next < clips.length) {
         captureIndexRef.current = next
@@ -1487,6 +1499,7 @@ export default function VideoAnalysis() {
     }
 
     const onLoadedData = () => {
+      if (aborted) return
       captureIndexRef.current = 0
       video.currentTime = clips[0].start
     }
@@ -1497,6 +1510,7 @@ export default function VideoAnalysis() {
     video.load()
 
     return () => {
+      aborted = true
       video.removeEventListener('seeked', onSeeked)
       video.removeEventListener('loadeddata', onLoadedData)
       video.src = ''

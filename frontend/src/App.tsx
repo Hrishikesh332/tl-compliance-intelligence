@@ -131,7 +131,10 @@ function Shell() {
                 className="font-brand text-text-primary hover:opacity-80 transition-opacity cursor-pointer shrink-0 text-left bg-transparent border-0 p-0 no-underline block"
                 aria-label="Go to Overview"
               >
-                <h1 className="text-base md:text-h5 font-medium truncate">Multi-Source Legal Evidence Investigator</h1>
+                <h1 className="text-base md:text-h5 font-medium truncate">
+                  <span className="md:hidden">Multi-Source Legal Investigator</span>
+                  <span className="hidden md:inline">Multi-Source Legal Evidence Investigator</span>
+                </h1>
               </button>
               <span className="hidden sm:inline-flex items-center px-2 py-1 rounded-sm border border-border bg-transparent text-text-secondary text-xs font-medium shrink-0 uppercase tracking-wide pointer-events-none select-none">
                 SAMPLE APP
