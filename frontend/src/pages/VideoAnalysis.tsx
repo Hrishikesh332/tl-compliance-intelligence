@@ -18,6 +18,7 @@ import { API_BASE } from '../config'
 import logoMarkSvg from '../../strand/assets/logo-mark.svg?raw'
 
 function toTitleCase(s: string): string {
+  if (!s || typeof s !== 'string') return ''
   return s.replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
@@ -1239,24 +1240,24 @@ export default function VideoAnalysis() {
   const cachedVideo = videoId ? getVideo(videoId) : undefined
   const videoTitle = cachedVideo?.metadata?.filename || videoId || ''
 
-  const rawAnalysis = cachedVideo?.metadata?.video_analysis as VideoAnalysisData | undefined
-  const videoAnalysis: VideoAnalysisData = rawAnalysis?.title
+  const rawAnalysis = cachedVideo?.metadata?.video_analysis as Record<string, unknown> | undefined
+  const videoAnalysis: VideoAnalysisData = rawAnalysis && typeof rawAnalysis === 'object' && rawAnalysis.title
     ? {
-        title: rawAnalysis.title,
-        description: rawAnalysis.description ?? '',
-        categories: Array.isArray(rawAnalysis.categories) ? rawAnalysis.categories : [],
-        topics: Array.isArray(rawAnalysis.topics) ? rawAnalysis.topics : [],
-        people: Array.isArray((rawAnalysis as { people?: string[] }).people) ? (rawAnalysis as { people: string[] }).people : [],
-        riskLevel: ['high', 'medium', 'low'].includes(rawAnalysis.riskLevel) ? rawAnalysis.riskLevel : 'medium',
+        title: String(rawAnalysis.title ?? ''),
+        description: String(rawAnalysis.description ?? ''),
+        categories: Array.isArray(rawAnalysis.categories) ? rawAnalysis.categories.filter((c): c is string => typeof c === 'string') : [],
+        topics: Array.isArray(rawAnalysis.topics) ? rawAnalysis.topics.filter((t): t is string => typeof t === 'string') : [],
+        people: Array.isArray((rawAnalysis as { people?: unknown }).people) ? ((rawAnalysis as { people: unknown[] }).people).filter((p): p is string => typeof p === 'string') : [],
+        riskLevel: ['high', 'medium', 'low'].includes(rawAnalysis.riskLevel as string) ? (rawAnalysis.riskLevel as 'high' | 'medium' | 'low') : 'medium',
         risks: Array.isArray(rawAnalysis.risks)
-          ? rawAnalysis.risks.map((r: any) => ({
-              label: r?.label ?? '',
+          ? (rawAnalysis.risks as any[]).filter(Boolean).map((r: any) => ({
+              label: String(r?.label ?? ''),
               severity: ['high', 'medium', 'low'].includes(r?.severity) ? r.severity : 'medium',
               timestamp: r?.timestamp ?? r?.time ?? null,
             }))
           : [],
         transcript: Array.isArray(rawAnalysis.transcript)
-          ? rawAnalysis.transcript.map((t: any) => ({ time: String(t?.time ?? '0:00'), text: String(t?.text ?? '') }))
+          ? (rawAnalysis.transcript as any[]).filter(Boolean).map((t: any) => ({ time: String(t?.time ?? '0:00'), text: String(t?.text ?? '') }))
           : [],
       }
     : DEFAULT_VIDEO_PLACEHOLDER
@@ -1324,20 +1325,20 @@ export default function VideoAnalysis() {
   const [insightsError, setInsightsError] = useState<string | null>(null)
   const [generatingInsights, setGeneratingInsights] = useState(false)
 
-  const people: PersonEntry[] = insights?.people?.map((p) => ({
-    id: p.entity_id,
-    name: p.name,
-    avatar: p.avatar,
-    percent: p.percent,
+  const people: PersonEntry[] = (insights?.people ?? []).filter(Boolean).map((p) => ({
+    id: p.entity_id ?? '',
+    name: p.name ?? '',
+    avatar: p.avatar ?? '',
+    percent: p.percent ?? 0,
     face_snap_base64: p.face_snap_base64,
     face_from_video_base64: p.face_from_video_base64,
-    clips: p.clips || [],
-  })) ?? []
-  const detectedFaces: DetectedFace[] = insights?.detected_faces ?? []
-  const mentionedNames: string[] = insights?.mentioned ?? []
-  const objectsList: ObjectInsight[] = insights?.objects ?? []
+    clips: Array.isArray(p.clips) ? p.clips : [],
+  }))
+  const detectedFaces: DetectedFace[] = (insights?.detected_faces ?? []).filter(Boolean)
+  const mentionedNames: string[] = (insights?.mentioned ?? []).filter((n): n is string => typeof n === 'string')
+  const objectsList: ObjectInsight[] = (insights?.objects ?? []).filter(Boolean)
   const linkDataByEntity: Record<string, PersonLinkData> = insights?.link_data_by_entity ?? {}
-  const videoDurationSec = insights?.video_duration_sec ?? 0
+  const videoDurationSec = Number(insights?.video_duration_sec) || 0
   const hasDetectedFaces = detectedFaces.length > 0
   const peopleCount = hasDetectedFaces ? detectedFaces.length : people.length
 
@@ -1391,8 +1392,19 @@ export default function VideoAnalysis() {
       })
       .then((data) => {
         if (aborted) return
-        if (data?.insights) setInsights(data.insights)
-        else setInsights(null)
+        if (data?.insights && typeof data.insights === 'object') {
+          const raw = data.insights
+          setInsights({
+            people: Array.isArray(raw.people) ? raw.people : undefined,
+            mentioned: Array.isArray(raw.mentioned) ? raw.mentioned : undefined,
+            detected_faces: Array.isArray(raw.detected_faces) ? raw.detected_faces : undefined,
+            objects: Array.isArray(raw.objects) ? raw.objects : [],
+            link_data_by_entity: raw.link_data_by_entity ?? {},
+            video_duration_sec: Number(raw.video_duration_sec) || 0,
+          })
+        } else {
+          setInsights(null)
+        }
       })
       .catch((e) => {
         if (aborted) return
@@ -1440,7 +1452,17 @@ export default function VideoAnalysis() {
       const res = await fetch(`${API_BASE}/api/videos/${encodeURIComponent(videoId)}/insights`, { method: 'POST' })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`)
-      if (mountedRef.current && data.insights) setInsights(data.insights)
+      if (mountedRef.current && data.insights && typeof data.insights === 'object') {
+        const raw = data.insights
+        setInsights({
+          people: Array.isArray(raw.people) ? raw.people : undefined,
+          mentioned: Array.isArray(raw.mentioned) ? raw.mentioned : undefined,
+          detected_faces: Array.isArray(raw.detected_faces) ? raw.detected_faces : undefined,
+          objects: Array.isArray(raw.objects) ? raw.objects : [],
+          link_data_by_entity: raw.link_data_by_entity ?? {},
+          video_duration_sec: Number(raw.video_duration_sec) || 0,
+        })
+      }
     } catch (e: any) {
       if (mountedRef.current) setInsightsError(e?.message ?? 'Failed to generate insights')
     } finally {

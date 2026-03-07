@@ -11,11 +11,17 @@ import { VideoCacheProvider } from './contexts/VideoCache'
 /* Strand: logo and icons from design system (strand/assets, strand/icons) */
 import logoMarkUrl from '../strand/assets/logo-mark.svg?url'
 
-class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
+class ErrorBoundary extends Component<{ children: ReactNode; resetKey?: string }, { hasError: boolean; error: Error | null }> {
   state = { hasError: false, error: null as Error | null }
 
   static getDerivedStateFromError(error: Error) {
     return { hasError: true, error }
+  }
+
+  componentDidUpdate(prevProps: { resetKey?: string }) {
+    if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ hasError: false, error: null })
+    }
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
@@ -51,6 +57,11 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
     }
     return this.props.children
   }
+}
+
+function RouteAwareErrorBoundary({ children }: { children: ReactNode }) {
+  const location = useLocation()
+  return <ErrorBoundary resetKey={location.pathname}>{children}</ErrorBoundary>
 }
 
 const navItems = [
@@ -89,6 +100,14 @@ function NavLinks({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate
         )
       })}
     </>
+  )
+}
+
+function VideoAnalysisWithBoundary() {
+  return (
+    <ErrorBoundary>
+      <VideoAnalysis />
+    </ErrorBoundary>
   )
 }
 
@@ -200,7 +219,7 @@ function Shell() {
             />
             <Route path="/entities" element={<EntitiesPage />} />
             <Route path="/chat" element={<Chatbot />} />
-            <Route path="/video/:videoId" element={<VideoAnalysis />} />
+            <Route path="/video/:videoId" element={<VideoAnalysisWithBoundary />} />
             <Route path="/" element={<OverviewPage />} />
           </Routes>
         </main>
@@ -214,9 +233,9 @@ function App() {
   return (
     <BrowserRouter>
       <VideoCacheProvider>
-        <ErrorBoundary>
+        <RouteAwareErrorBoundary>
           <Shell />
-        </ErrorBoundary>
+        </RouteAwareErrorBoundary>
       </VideoCacheProvider>
     </BrowserRouter>
   )
