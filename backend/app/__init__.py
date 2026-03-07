@@ -251,3 +251,7 @@ def _update_index_meta(idx: list, vid_id: str, updates: dict) -> None:
             meta = rec.setdefault("metadata", {})
             meta.update(updates)
             break
+
+
+# WSGI entry point: gunicorn app:app loads this attribute
+app = create_app()
