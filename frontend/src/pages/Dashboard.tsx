@@ -9,6 +9,15 @@ import arrowBoxUpIconUrl from '../../strand/icons/arrow-box-up.svg?url'
 
 import { API_BASE } from '../config'
 
+type DocResult = {
+  id: string
+  score: number
+  doc_id: string
+  filename: string
+  chunk_index: number
+  text: string
+}
+
 type SearchAttachment = {
   id: string
   type: 'image' | 'entity'
@@ -281,6 +290,7 @@ type VideoItem = {
   entities?: TableEntity[]
   streamUrl?: string
   thumbnailUrl?: string
+  thumbnailDataUrl?: string
   durationSeconds?: number
   clips?: ClipMatch[]
   searchScore?: number
@@ -309,9 +319,7 @@ function clipScoreColor(score: number): string {
   return 'bg-red-50 text-red-600 border-red-200'
 }
 
-const SAMPLE_VIDEOS: VideoItem[] = [
-  { id: 'abc123', title: 'Officer_patrol_downtown.mp4', uploadDate: '03-15-2024', duration: '00:02:19', totalMinutes: 2, category: 'BodyCam', tags: ['BodyCam', 'Patrol', 'Unit 7'], entities: [{ id: 'e1', name: 'Karen Nelson', imageUrl: 'https://picsum.photos/128/128?random=1', initials: 'KN' }, { id: 'e2', name: 'Esther Howard', imageUrl: 'https://picsum.photos/128/128?random=2', initials: 'EH' }, { id: 'e3', name: 'Robert Fox', initials: 'RF' }] },
-]
+const SAMPLE_VIDEOS: VideoItem[] = []
 
 const TOTAL_CAPACITY = 100
 const TOTAL_HOURS = 10
@@ -487,6 +495,48 @@ function AdvancedParamsDropdown({
 }
 
 /* ------------------------------------------------------------------ */
+/*  Document result card                                               */
+/* ------------------------------------------------------------------ */
+
+function DocResultCard({ ext, filename, chunkIndex, text, scorePercent, scoreColor }: {
+  ext: string; filename: string; chunkIndex: number; text: string;
+  scorePercent: number; scoreColor: string;
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const snippet = text.length > 300 ? text.slice(0, 300) : text
+  const hasMore = text.length > 300
+
+  return (
+    <div className="rounded-xl border border-border bg-surface p-4 flex gap-4 items-start">
+      <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-gray-100 text-gray-500 shrink-0">
+        <span className="text-[10px] font-bold leading-none">{ext}</span>
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap mb-1">
+          <span className="text-sm font-medium text-text-primary truncate">{filename}</span>
+          <span className="text-xs text-text-tertiary">Page {chunkIndex + 1}</span>
+          <span className={`inline-flex px-2 py-0.5 rounded text-xs font-semibold border ${scoreColor}`}>
+            {scorePercent}%
+          </span>
+        </div>
+        <p className="text-sm text-text-secondary whitespace-pre-wrap break-words">
+          {expanded ? text : snippet}{!expanded && hasMore ? '...' : ''}
+        </p>
+        {hasMore && (
+          <button
+            type="button"
+            onClick={() => setExpanded((p) => !p)}
+            className="mt-1 text-xs text-accent hover:underline"
+          >
+            {expanded ? 'Show less' : 'Show more'}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
 /*  Dashboard                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -497,11 +547,16 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
   const [addEntityModalOpen, setAddEntityModalOpen] = useState(false)
   const [searchAttachments, setSearchAttachments] = useState<SearchAttachment[]>([])
   const [searchQuery, setSearchQuery] = useState('')
+  const [docResults, setDocResults] = useState<DocResult[] | null>(null)
+  const [docsExpanded, setDocsExpanded] = useState(true)
   const [sortBy, setSortBy] = useState<'recent' | 'name'>('recent')
   const [activeCategory, setActiveCategory] = useState<string>('All')
   const [viewMode, setViewMode] = useState<'videos' | 'tabular'>('videos')
+  const [videosPage, setVideosPage] = useState(1)
   const [tabularPage, setTabularPage] = useState(1)
-  const TABULAR_PAGE_SIZE = 4
+  const FIRST_VIDEOS_PAGE_SIZE = 7
+  const OTHER_VIDEOS_PAGE_SIZE = 8
+  const TABULAR_PAGE_SIZE = 8
   const { videos: cachedVideos } = useVideoCache()
   const apiVideos = useMemo<VideoItem[]>(() => {
     return cachedVideos.map((v: CachedVideo) => {
@@ -550,11 +605,12 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
         category: 'Uploaded',
         tags: [
           ...(Array.isArray(meta.tags) ? meta.tags : []),
-          meta.status === 'ready' ? 'Indexed' : meta.status === 'indexing' ? 'Indexing' : 'Uploaded',
+          meta.status === 'ready' ? 'Indexed' : meta.status === 'indexing' ? 'Indexing' : meta.status === 'queued' ? 'Queued' : 'Uploaded',
         ],
         entities,
         streamUrl: v.stream_url || undefined,
         thumbnailUrl: v.thumbnail_url || undefined,
+        thumbnailDataUrl: v.thumbnail_data_url || undefined,
         durationSeconds: dur ?? undefined,
         categories: Array.isArray(analysis?.categories) ? analysis.categories : undefined,
         aboutTopics: Array.isArray(analysis?.topics) ? analysis.topics : undefined,
@@ -705,6 +761,22 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
     })
   }, [filteredVideos, cachedVideos])
 
+  const totalVideoPages = useMemo(() => {
+    const total = filteredVideos.length
+    if (total <= FIRST_VIDEOS_PAGE_SIZE) return 1
+    const remaining = total - FIRST_VIDEOS_PAGE_SIZE
+    return 1 + Math.max(1, Math.ceil(remaining / OTHER_VIDEOS_PAGE_SIZE))
+  }, [filteredVideos.length])
+  const paginatedVideos = useMemo(() => {
+    const total = filteredVideos.length
+    if (total === 0) return []
+    if (videosPage === 1) {
+      return filteredVideos.slice(0, FIRST_VIDEOS_PAGE_SIZE)
+    }
+    const start = FIRST_VIDEOS_PAGE_SIZE + (videosPage - 2) * OTHER_VIDEOS_PAGE_SIZE
+    return filteredVideos.slice(start, start + OTHER_VIDEOS_PAGE_SIZE)
+  }, [filteredVideos, videosPage])
+
   const totalTabularPages = Math.max(1, Math.ceil(videosForTable.length / TABULAR_PAGE_SIZE))
   const paginatedTabularVideos = useMemo(() => {
     const start = (tabularPage - 1) * TABULAR_PAGE_SIZE
@@ -715,6 +787,10 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
     if (viewMode === 'tabular' && tabularPage > totalTabularPages) setTabularPage(1)
   }, [viewMode, tabularPage, totalTabularPages])
 
+  useEffect(() => {
+    if (viewMode === 'videos') setVideosPage(1)
+  }, [viewMode, activeCategory, sortBy, searchResults, filteredVideos.length])
+
   async function handleSearch(overrideQuery?: string) {
     const query = (overrideQuery ?? searchQuery).trim()
     const entityIds = searchAttachments.filter((a) => a.type === 'entity').map((a) => a.id)
@@ -723,91 +799,124 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
     if (!hasQuery && !hasEntities) return
     setSearchError(null)
     setSearchLoading(true)
-    try {
-      const body: Record<string, unknown> = {
-        top_k: hasEntities ? 12 : 24,
-        clips_per_video: hasEntities ? 3 : 5,
-      }
-      if (hasQuery) body.query = query
-      if (hasEntities) body.entity_ids = entityIds
-      const res = await fetch(`${API_BASE}/api/search/videos`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        setSearchError(data.error || 'Search failed')
-        setSearchResults(null)
-        return
-      }
-      const results: VideoItem[] = (data.results || []).map((r: any) => {
-        const meta = r.metadata || {}
-        const analysis = meta.video_analysis as { categories?: string[]; topics?: string[]; people?: string[]; riskLevel?: string } | undefined
-        let uploadDate = ''
-        try {
-          const u = meta.uploaded_at || ''
-          if (u) {
-            const d = new Date(u)
-            uploadDate = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}-${d.getFullYear()}`
-          }
-        } catch { uploadDate = meta.uploaded_at || '' }
-        const dur = r.duration_seconds ?? meta.duration_seconds
-        const riskLevel = analysis?.riskLevel
-        const validRisk = riskLevel === 'high' || riskLevel === 'medium' || riskLevel === 'low' ? riskLevel : undefined
-        const insights = meta.video_insights as { objects?: Array<{ object?: string }>; detected_faces?: Array<{ face_id?: number | string; face_path?: string }> } | undefined
-        const rawObjs = Array.isArray(insights?.objects) ? insights.objects : []
-        const detectedObjects = [...new Set(rawObjs.map((o) => (o && typeof o.object === 'string' ? o.object.trim() : '')).filter(Boolean))]
-        const detectedFaces = Array.isArray(insights?.detected_faces) ? insights.detected_faces : []
-        const entities: TableEntity[] = detectedFaces.map((f, i) => {
-          let faceId: number
-          if (typeof f.face_id === 'number' && Number.isInteger(f.face_id)) {
-            faceId = f.face_id
-          } else if (typeof f.face_id === 'string' && /^\d+$/.test(f.face_id)) {
-            faceId = parseInt(f.face_id, 10)
-          } else if (f.face_path && typeof f.face_path === 'string') {
-            const m = f.face_path.match(/face_(\d+)\.png/)
-            faceId = m ? parseInt(m[1], 10) : i
-          } else {
-            faceId = i
-          }
-          return {
-            id: `face-${r.id}-${faceId}`,
-            name: `Face ${faceId + 1}`,
-            imageUrl: `${API_BASE}/api/videos/${r.id}/faces/${faceId}`,
-            initials: `F${faceId + 1}`,
-          }
+    setDocResults(null)
+
+    const headers = { 'Content-Type': 'application/json' }
+
+    const videoBody: Record<string, unknown> = {
+      top_k: hasEntities ? 12 : 24,
+      clips_per_video: hasEntities ? 3 : 5,
+    }
+    if (hasQuery) videoBody.query = query
+    if (hasEntities) videoBody.entity_ids = entityIds
+
+    const videoFetch = fetch(`${API_BASE}/api/search/videos`, {
+      method: 'POST', headers, body: JSON.stringify(videoBody),
+    })
+    const docFetch = hasQuery
+      ? fetch(`${API_BASE}/api/documents/search`, {
+          method: 'POST', headers,
+          body: JSON.stringify({ query, top_k: 10 }),
         })
-        return {
-          id: r.id,
-          title: meta.filename || r.id,
-          uploadDate,
-          duration: dur != null ? formatSecondsToTimestamp(dur) : '—',
-          totalMinutes: dur != null ? Math.ceil(dur / 60) : 0,
-          category: 'Uploaded',
-          tags: [
-            ...(Array.isArray(meta.tags) ? meta.tags : []),
-            meta.status === 'ready' ? 'Indexed' : meta.status === 'indexing' ? 'Indexing' : 'Uploaded',
-          ],
-          entities,
-          streamUrl: r.stream_url || undefined,
-          thumbnailUrl: r.thumbnail_url || undefined,
-          durationSeconds: dur ?? undefined,
-          clips: Array.isArray(r.clips) ? r.clips : [],
-          searchScore: r.score,
-          categories: Array.isArray(analysis?.categories) ? analysis.categories : undefined,
-          aboutTopics: Array.isArray(analysis?.topics) ? analysis.topics : undefined,
-          people: Array.isArray(analysis?.people) ? analysis.people : undefined,
-          riskLevel: validRisk,
-          detectedObjects: detectedObjects.length > 0 ? detectedObjects : undefined,
+      : null
+
+    try {
+      const settled = await Promise.allSettled(
+        docFetch ? [videoFetch, docFetch] : [videoFetch],
+      )
+
+      const videoSettled = settled[0]
+      if (videoSettled.status === 'fulfilled') {
+        const res = videoSettled.value
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          setSearchError(data.error || 'Search failed')
+          setSearchResults(null)
+        } else {
+          const results: VideoItem[] = (data.results || []).map((r: any) => {
+            const meta = r.metadata || {}
+            const analysis = meta.video_analysis as { categories?: string[]; topics?: string[]; people?: string[]; riskLevel?: string } | undefined
+            let uploadDate = ''
+            try {
+              const u = meta.uploaded_at || ''
+              if (u) {
+                const d = new Date(u)
+                uploadDate = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}-${d.getFullYear()}`
+              }
+            } catch { uploadDate = meta.uploaded_at || '' }
+            const dur = r.duration_seconds ?? meta.duration_seconds
+            const riskLevel = analysis?.riskLevel
+            const validRisk = riskLevel === 'high' || riskLevel === 'medium' || riskLevel === 'low' ? riskLevel : undefined
+            const insights = meta.video_insights as { objects?: Array<{ object?: string }>; detected_faces?: Array<{ face_id?: number | string; face_path?: string }> } | undefined
+            const rawObjs = Array.isArray(insights?.objects) ? insights.objects : []
+            const detectedObjects = [...new Set(rawObjs.map((o) => (o && typeof o.object === 'string' ? o.object.trim() : '')).filter(Boolean))]
+            const detectedFaces = Array.isArray(insights?.detected_faces) ? insights.detected_faces : []
+            const entities: TableEntity[] = detectedFaces.map((f, i) => {
+              let faceId: number
+              if (typeof f.face_id === 'number' && Number.isInteger(f.face_id)) {
+                faceId = f.face_id
+              } else if (typeof f.face_id === 'string' && /^\d+$/.test(f.face_id)) {
+                faceId = parseInt(f.face_id, 10)
+              } else if (f.face_path && typeof f.face_path === 'string') {
+                const m = f.face_path.match(/face_(\d+)\.png/)
+                faceId = m ? parseInt(m[1], 10) : i
+              } else {
+                faceId = i
+              }
+              return {
+                id: `face-${r.id}-${faceId}`,
+                name: `Face ${faceId + 1}`,
+                imageUrl: `${API_BASE}/api/videos/${r.id}/faces/${faceId}`,
+                initials: `F${faceId + 1}`,
+              }
+            })
+            return {
+              id: r.id,
+              title: meta.filename || r.id,
+              uploadDate,
+              duration: dur != null ? formatSecondsToTimestamp(dur) : '—',
+              totalMinutes: dur != null ? Math.ceil(dur / 60) : 0,
+              category: 'Uploaded',
+              tags: [
+                ...(Array.isArray(meta.tags) ? meta.tags : []),
+                meta.status === 'ready' ? 'Indexed' : meta.status === 'indexing' ? 'Indexing' : meta.status === 'queued' ? 'Queued' : 'Uploaded',
+              ],
+              entities,
+              streamUrl: r.stream_url || undefined,
+              thumbnailUrl: r.thumbnail_url || undefined,
+              thumbnailDataUrl: r.thumbnail_data_url || undefined,
+              durationSeconds: dur ?? undefined,
+              clips: Array.isArray(r.clips) ? r.clips : [],
+              searchScore: r.score,
+              categories: Array.isArray(analysis?.categories) ? analysis.categories : undefined,
+              aboutTopics: Array.isArray(analysis?.topics) ? analysis.topics : undefined,
+              people: Array.isArray(analysis?.people) ? analysis.people : undefined,
+              riskLevel: validRisk,
+              detectedObjects: detectedObjects.length > 0 ? detectedObjects : undefined,
+            }
+          })
+          const displayQuery = data.query ?? (hasQuery ? query : (hasEntities ? `Entity: ${searchAttachments.filter((a) => a.type === 'entity').map((a) => a.name).join(', ')}` : query))
+          setSearchResults({ query: displayQuery, results })
+          try {
+            sessionStorage.setItem('vc_last_search', JSON.stringify({ query: displayQuery, results }))
+          } catch { /* ignore */ }
         }
-      })
-      const displayQuery = data.query ?? (hasQuery ? query : (hasEntities ? `Entity: ${searchAttachments.filter((a) => a.type === 'entity').map((a) => a.name).join(', ')}` : query))
-      setSearchResults({ query: displayQuery, results })
-      try {
-        sessionStorage.setItem('vc_last_search', JSON.stringify({ query: displayQuery, results }))
-      } catch {
-        // ignore
+      } else {
+        setSearchError('Search request failed')
+        setSearchResults(null)
+      }
+
+      if (docFetch && settled.length > 1) {
+        const docSettled = settled[1]
+        if (docSettled && docSettled.status === 'fulfilled') {
+          try {
+            const docRes = (docSettled as PromiseFulfilledResult<Response>).value
+            if (docRes && docRes.ok) {
+              const docData = await docRes.json()
+              setDocResults(Array.isArray(docData.results) ? docData.results : null)
+            }
+          } catch { /* doc search failed silently */ }
+        }
       }
     } catch (e) {
       setSearchError('Search request failed')
@@ -834,6 +943,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
 
   function clearSearch() {
     setSearchResults(null)
+    setDocResults(null)
     setSearchError(null)
     try {
       sessionStorage.removeItem('vc_last_search')
@@ -1058,7 +1168,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
             <img src={spinnerIconUrl} alt="" className="w-5 h-5 animate-spin" aria-hidden />
           </span>
           <div>
-            <p className="text-sm font-medium text-text-primary">Searching across videos…</p>
+            <p className="text-sm font-medium text-text-primary">Searching across videos and documents…</p>
             <p className="text-xs text-text-secondary">This may take a few seconds.</p>
           </div>
         </div>
@@ -1073,9 +1183,15 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
       {searchResults && (
         <div className="flex flex-wrap items-center gap-3 mb-3">
           <span className="text-sm text-text-secondary">
-            {searchResults.results.length === 0
-              ? `No videos found for “${searchResults.query}”.`
-              : `${searchResults.results.length} result${searchResults.results.length !== 1 ? 's' : ''} for “${searchResults.query}”`}
+            {(() => {
+              const vCount = searchResults.results.length
+              const dCount = docResults?.length ?? 0
+              if (vCount === 0 && dCount === 0) return `No results found for “${searchResults.query}”.`
+              const parts: string[] = []
+              if (vCount > 0) parts.push(`${vCount} video${vCount !== 1 ? 's' : ''}`)
+              if (dCount > 0) parts.push(`${dCount} document${dCount !== 1 ? 's' : ''}`)
+              return `${parts.join(' and ')} for “${searchResults.query}”`
+            })()}
           </span>
           <button
             type="button"
@@ -1113,7 +1229,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
           <div className="flex items-center rounded-lg border border-border bg-surface p-0.5">
             <button
               type="button"
-              onClick={() => setViewMode('videos')}
+              onClick={() => { setViewMode('videos'); setVideosPage(1) }}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
                 viewMode === 'videos'
                   ? 'bg-brand-charcoal text-brand-white'
@@ -1181,21 +1297,28 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                 <span className="flex items-center justify-center w-11 h-11 text-text-tertiary group-hover:text-text-secondary transition-colors mb-3">
                   <img src={arrowBoxUpIconUrl} alt="" className="w-5 h-5" aria-hidden />
                 </span>
-                <p className="text-sm font-semibold text-text-primary">Drop videos or browse files</p>
+                <p className="text-sm font-semibold text-text-primary">Drop videos or documents</p>
                 <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
                   <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium text-text-secondary border border-border">
-                    MP4, MOV, AVI
+                    Videos: MP4, MOV, AVI
                   </span>
                   <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium text-text-secondary border border-border">
-                    Max 300 MB
+                    Docs: PDF, DOCX, PPTX
                   </span>
                 </div>
-                <p className="mt-2.5 text-[11px] sm:text-xs text-text-tertiary max-w-[200px] text-center leading-snug">
-                  Processing takes ~2–3 min (indexing, tool detection, analysis)
-                </p>
+                <ul className="mt-2.5 text-[11px] sm:text-xs text-text-tertiary text-center leading-snug space-y-0.5 max-w-[220px] mx-auto list-none px-1">
+                  <li className="flex items-center justify-center gap-1.5">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" aria-hidden />
+                    Videos: indexing &amp; analysis
+                  </li>
+                  <li className="flex items-center justify-center gap-1.5">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" aria-hidden />
+                    Documents: NeMo Retriever
+                  </li>
+                </ul>
               </button>
             )}
-            {filteredVideos.map((v) => (
+            {paginatedVideos.map((v) => (
                 <Link
                   key={v.id}
                   to={`/video/${v.id}`}
@@ -1208,15 +1331,29 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                   className="group block focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-xl min-w-0"
                 >
                   <div className="relative aspect-video rounded-xl overflow-hidden bg-brand-charcoal">
-                    {v.thumbnailUrl ? (
-                      <img
-                        src={v.thumbnailUrl}
-                        alt={v.title}
-                        loading="lazy"
-                        decoding="async"
-                        className="absolute inset-0 w-full h-full object-cover brightness-105"
-                        onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
-                      />
+                    {(v.thumbnailDataUrl || v.thumbnailUrl) ? (
+                      <>
+                        {/* Inline base64 blur — renders instantly with the card, no extra HTTP request */}
+                        {v.thumbnailDataUrl && (
+                          <img
+                            src={v.thumbnailDataUrl}
+                            alt=""
+                            className="absolute inset-0 w-full h-full object-cover brightness-105"
+                            aria-hidden
+                          />
+                        )}
+                        {/* Full-res thumbnail loads on top; replaces blur once downloaded */}
+                        {v.thumbnailUrl && (
+                          <img
+                            src={v.thumbnailUrl}
+                            alt={v.title}
+                            loading="lazy"
+                            decoding="async"
+                            className="absolute inset-0 w-full h-full object-cover brightness-105"
+                            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+                          />
+                        )}
+                      </>
                     ) : v.streamUrl ? (
                       <video
                         src={v.streamUrl}
@@ -1235,7 +1372,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                         }}
                       />
                     ) : null}
-                    {v.thumbnailUrl && v.durationSeconds == null && v.streamUrl ? (
+                    {(v.thumbnailDataUrl || v.thumbnailUrl) && v.durationSeconds == null && v.streamUrl ? (
                       <video
                         src={v.streamUrl}
                         className="absolute w-0 h-0 opacity-0 pointer-events-none"
@@ -1270,13 +1407,95 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                   <p className="mt-2.5 text-sm text-text-secondary truncate group-hover:text-text-primary transition-colors">
                     {v.title}
                   </p>
-                  <p className="mt-0.5 text-sm text-text-tertiary tabular-nums">
-                    {videoDurations[v.id] != null ? formatDurationShort(formatSecondsToTimestamp(videoDurations[v.id])) : v.duration !== '—' ? formatDurationShort(v.duration) : '—'}
-                  </p>
                 </Link>
               ))}
             </div>
+          {filteredVideos.length > 0 && (
+            <div className="flex items-center justify-between gap-4 mt-4">
+              <p className="text-sm text-gray-500 tabular-nums">
+                {(() => {
+                  const total = filteredVideos.length
+                  if (total === 0) return 'Showing 0 of 0'
+                  if (videosPage === 1) {
+                    const start = 1
+                    const end = Math.min(FIRST_VIDEOS_PAGE_SIZE, total)
+                    return `Showing ${start}–${end} of ${total}`
+                  }
+                  const start = FIRST_VIDEOS_PAGE_SIZE + (videosPage - 2) * OTHER_VIDEOS_PAGE_SIZE + 1
+                  const end = Math.min(FIRST_VIDEOS_PAGE_SIZE + (videosPage - 1) * OTHER_VIDEOS_PAGE_SIZE, total)
+                  return `Showing ${start}–${end} of ${total}`
+                })()}
+              </p>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setVideosPage((p) => Math.max(1, p - 1))}
+                  disabled={videosPage <= 1}
+                  className="inline-flex h-8 min-w-[2rem] items-center justify-center rounded-lg border border-border bg-surface px-2.5 text-sm font-medium text-text-primary shadow-sm transition-colors hover:bg-gray-50 disabled:pointer-events-none disabled:opacity-50"
+                  aria-label="Previous page"
+                >
+                  Previous
+                </button>
+                <span className="flex h-8 items-center px-2 text-sm text-gray-500">
+                  Page {videosPage} of {totalVideoPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setVideosPage((p) => Math.min(totalVideoPages, p + 1))}
+                  disabled={videosPage >= totalVideoPages}
+                  className="inline-flex h-8 min-w-[2rem] items-center justify-center rounded-lg border border-border bg-surface px-2.5 text-sm font-medium text-text-primary shadow-sm transition-colors hover:bg-gray-50 disabled:pointer-events-none disabled:opacity-50"
+                  aria-label="Next page"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </>
+      )}
+
+      {/* ─── Document results (NeMo Retriever) ─── */}
+      {docResults && docResults.length > 0 && (
+        <div className="mb-6">
+          <button
+            type="button"
+            onClick={() => setDocsExpanded((prev) => !prev)}
+            className="flex items-center gap-2 mb-3 group"
+          >
+            <svg
+              className={`w-4 h-4 text-text-tertiary transition-transform ${docsExpanded ? 'rotate-90' : ''}`}
+              viewBox="0 0 16 16" fill="currentColor"
+            >
+              <path d="M6 3.5L10.5 8 6 12.5V3.5Z" />
+            </svg>
+            <h3 className="text-sm font-semibold text-text-primary group-hover:text-accent transition-colors">
+              Documents ({docResults.length} result{docResults.length !== 1 ? 's' : ''})
+            </h3>
+          </button>
+          {docsExpanded && (
+            <div className="grid gap-3">
+              {docResults.map((doc) => {
+                const ext = doc.filename.split('.').pop()?.toUpperCase() || 'DOC'
+                const scorePercent = Math.round(doc.score * 100)
+                const scoreColor =
+                  scorePercent >= 80 ? 'bg-green-100 text-green-800 border-green-200'
+                  : scorePercent >= 60 ? 'bg-amber-100 text-amber-800 border-amber-200'
+                  : 'bg-gray-100 text-gray-600 border-gray-200'
+                return (
+                  <DocResultCard
+                    key={doc.id}
+                    ext={ext}
+                    filename={doc.filename}
+                    chunkIndex={doc.chunk_index}
+                    text={doc.text}
+                    scorePercent={scorePercent}
+                    scoreColor={scoreColor}
+                  />
+                )
+              })}
+            </div>
+          )}
+        </div>
       )}
 
       {/* ─── Tabular view (data from video analysis metadata) ─── */}

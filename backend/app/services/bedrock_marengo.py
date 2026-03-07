@@ -1,16 +1,40 @@
 import base64
 import json
+import logging
 import os
+import threading
 
 import boto3
+from botocore.config import Config
+
+log = logging.getLogger("app.services.bedrock_marengo")
 
 MARENGO_MODEL_ID = "twelvelabs.marengo-embed-3-0-v1:0"
 REGION_PREFIX = {"us-east-1": "us", "eu-west-1": "eu", "ap-northeast-2": "ap"}
 
+_client_lock = threading.Lock()
+_cached_client = None
+_cached_region: str | None = None
+
 
 def _bedrock_client():
+    global _cached_client, _cached_region
     region = os.environ.get("AWS_REGION", "us-east-1")
-    return boto3.client("bedrock-runtime", region_name=region)
+    if _cached_client is not None and _cached_region == region:
+        return _cached_client
+    with _client_lock:
+        if _cached_client is not None and _cached_region == region:
+            return _cached_client
+        cfg = Config(
+            region_name=region,
+            connect_timeout=15,
+            read_timeout=300,
+            retries={"max_attempts": 5, "mode": "adaptive"},
+        )
+        _cached_client = boto3.client("bedrock-runtime", config=cfg)
+        _cached_region = region
+        log.info("Created bedrock-runtime client (region=%s, adaptive retries)", region)
+        return _cached_client
 
 
 def _inference_profile_id():
@@ -112,7 +136,7 @@ def start_video_embedding(
 
 def get_async_invocation(invocation_arn: str) -> dict:
     client = _bedrock_client()
-    resp = client.get_async_invocation(invocationArn=invocation_arn)
+    resp = client.get_async_invoke(invocationArn=invocation_arn)
     status = resp.get("status", "unknown")
     result = {
         "invocation_arn": invocation_arn,

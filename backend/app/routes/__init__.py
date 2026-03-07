@@ -6,6 +6,7 @@ from app.routes.entities import entities_bp
 from app.routes.search import search_bp
 from app.routes.embed import embed_bp
 from app.routes.index_routes import index_bp
+from app.routes.documents import documents_bp
 
 __all__ = [
     "main_bp",
@@ -16,4 +17,5 @@ __all__ = [
     "search_bp",
     "embed_bp",
     "index_bp",
+    "documents_bp",
 ]

@@ -5,7 +5,7 @@ import Dashboard from './pages/Dashboard'
 import VideoAnalysis from './pages/VideoAnalysis'
 import EntitiesPage from './pages/EntitiesPage'
 import Chatbot from './pages/Chatbot'
-import UploadVideosModal from './components/UploadVideosModal'
+import UploadMediaModal from './components/UploadMediaModal'
 import { VideoCacheProvider } from './contexts/VideoCache'
 /* Strand: logo and icons from design system (strand/assets, strand/icons) */
 import logoMarkUrl from '../strand/assets/logo-mark.svg?url'
@@ -165,7 +165,7 @@ function Shell() {
           </Routes>
         </main>
       </div>
-      <UploadVideosModal open={uploadModalOpen} onClose={() => setUploadModalOpen(false)} />
+      <UploadMediaModal open={uploadModalOpen} onClose={() => setUploadModalOpen(false)} />
     </div>
   )
 }

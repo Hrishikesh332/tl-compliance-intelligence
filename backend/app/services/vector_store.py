@@ -17,11 +17,17 @@ _LOCAL_PATH = _DATA_DIR / f"{FIXED_INDEX_ID}.json"
 _store: dict[str, list[dict]] = {}
 _use_s3: bool = False
 _s3_cache_ts: float = 0.0
-_S3_CACHE_TTL: float = 30.0
+_S3_CACHE_TTL: float = 120.0
+
+_cached_vs_s3 = None
 
 
 def _s3_client():
-    return boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+    global _cached_vs_s3
+    if _cached_vs_s3 is not None:
+        return _cached_vs_s3
+    _cached_vs_s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+    return _cached_vs_s3
 
 
 def _s3_key() -> str:

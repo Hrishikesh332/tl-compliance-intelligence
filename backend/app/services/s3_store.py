@@ -1,9 +1,14 @@
 import os
 import time
 import uuid
+import logging
+import io
+import threading
 from datetime import datetime, timezone
 
 import boto3
+from botocore.config import Config
+from boto3.s3.transfer import TransferConfig
 
 S3_BUCKET = os.environ.get("S3_BUCKET", "video-compliance-store")
 ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
@@ -13,16 +18,89 @@ _PRESIGNED_URL_EXPIRES = 3600
 _PRESIGNED_CACHE_TTL = _PRESIGNED_URL_EXPIRES - 600
 _presigned_cache: dict[str, tuple[str, float]] = {}
 
+log = logging.getLogger("app.services.s3_store")
+
+_s3_lock = threading.Lock()
+_cached_s3 = None
+_cached_s3_region: str | None = None
+
 
 def _s3():
-    return boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+    """
+    Singleton S3 client with explicit timeouts/retries so uploads don't hang
+    indefinitely. Re-created only when AWS_REGION changes.
+    """
+    global _cached_s3, _cached_s3_region
+    region = os.environ.get("AWS_REGION", "us-east-1")
+    if _cached_s3 is not None and _cached_s3_region == region:
+        return _cached_s3
+    with _s3_lock:
+        if _cached_s3 is not None and _cached_s3_region == region:
+            return _cached_s3
+        connect_timeout = int(os.environ.get("AWS_CONNECT_TIMEOUT_SEC", "10"))
+        read_timeout = int(os.environ.get("AWS_READ_TIMEOUT_SEC", "120"))
+        max_attempts = int(os.environ.get("AWS_MAX_ATTEMPTS", "5"))
+        cfg = Config(
+            region_name=region,
+            connect_timeout=connect_timeout,
+            read_timeout=read_timeout,
+            retries={"max_attempts": max_attempts, "mode": "adaptive"},
+        )
+        _cached_s3 = boto3.client("s3", config=cfg)
+        _cached_s3_region = region
+        log.info("Created S3 client (region=%s, adaptive retries)", region)
+        return _cached_s3
+
+
+class _ProgressLogger:
+    def __init__(self, label: str, total_bytes: int, interval_sec: float = 5.0):
+        self.label = label
+        self.total = max(int(total_bytes), 0)
+        self.interval = float(interval_sec)
+        self._last_log = 0.0
+        self._sent = 0
+
+    def __call__(self, bytes_amount: int) -> None:
+        self._sent += int(bytes_amount or 0)
+        now = time.monotonic()
+        if now - self._last_log < self.interval:
+            return
+        self._last_log = now
+        if self.total > 0:
+            pct = (self._sent / self.total) * 100.0
+            log.info("S3 upload progress %s: %.1f%% (%d/%d bytes)", self.label, pct, self._sent, self.total)
+        else:
+            log.info("S3 upload progress %s: %d bytes", self.label, self._sent)
 
 
 def upload_video(file_bytes: bytes, filename: str) -> dict:
     video_id = str(uuid.uuid4())
     ext = os.path.splitext(filename)[1] or ".mp4"
     key = f"videos/{video_id}{ext}"
-    _s3().put_object(Bucket=S3_BUCKET, Key=key, Body=file_bytes, ContentType="video/mp4")
+    content_type = "video/mp4"
+    try:
+        size = len(file_bytes)
+        log.info("Uploading video to S3 (multipart): bucket=%s key=%s bytes=%d", S3_BUCKET, key, size)
+        multipart_mb = int(os.environ.get("S3_MULTIPART_MB", "16"))
+        config = TransferConfig(
+            multipart_threshold=multipart_mb * 1024 * 1024,
+            multipart_chunksize=multipart_mb * 1024 * 1024,
+            max_concurrency=int(os.environ.get("S3_MAX_CONCURRENCY", "10")),
+            use_threads=True,
+        )
+        cb = _ProgressLogger(label=key, total_bytes=size, interval_sec=float(os.environ.get("S3_PROGRESS_SEC", "5")))
+        _s3().upload_fileobj(
+            Fileobj=io.BytesIO(file_bytes),
+            Bucket=S3_BUCKET,
+            Key=key,
+            ExtraArgs={"ContentType": content_type},
+            Config=config,
+            Callback=cb,
+        )
+        log.info("Uploaded video to S3 OK: s3://%s/%s", S3_BUCKET, key)
+    except Exception as e:
+        log.error("S3 upload FAILED: bucket=%s key=%s err=%s", S3_BUCKET, key, e, exc_info=True)
+        raise
     s3_uri = f"s3://{S3_BUCKET}/{key}"
     return {
         "video_id": video_id,

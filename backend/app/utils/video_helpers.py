@@ -38,7 +38,194 @@ _INSIGHTS_CACHE_ROOT = _BACKEND_DIR / "data" / "videos"
 _tasks: dict[str, dict] = {}
 _video_list_cache: dict | None = None
 _video_list_cache_ts: float = 0.0
-_VIDEO_LIST_CACHE_TTL: float = 10.0
+_VIDEO_LIST_CACHE_TTL: float = 300.0
+
+# ---------------------------------------------------------------------------
+# Background Bedrock job queue + auto-poller
+# ---------------------------------------------------------------------------
+import threading
+import queue as _queue_mod
+
+_bedrock_queue: _queue_mod.Queue = _queue_mod.Queue()
+_poller_jobs: list[dict] = []
+_poller_lock = threading.Lock()
+_worker_started = False
+_poller_started = False
+
+_BEDROCK_INTER_JOB_DELAY = 5.0
+_POLL_INTERVAL = 15.0
+_POLL_MAX_WAIT = 1800.0
+
+
+def enqueue_bedrock_start(task_id: str, s3_uri: str, output_uri: str, filename: str, meta: dict) -> None:
+    """Queue a Bedrock embedding start to be processed in the background."""
+    _bedrock_queue.put({
+        "task_id": task_id,
+        "s3_uri": s3_uri,
+        "output_uri": output_uri,
+        "filename": filename,
+        "meta": meta,
+    })
+    _ensure_worker()
+    _ensure_poller()
+
+
+def _ensure_worker():
+    global _worker_started
+    if _worker_started:
+        return
+    _worker_started = True
+    t = threading.Thread(target=_bedrock_worker, daemon=True, name="bedrock-worker")
+    t.start()
+    log.info("[QUEUE] Bedrock worker thread started")
+
+
+def _ensure_poller():
+    global _poller_started
+    if _poller_started:
+        return
+    _poller_started = True
+    t = threading.Thread(target=_bedrock_poller, daemon=True, name="bedrock-poller")
+    t.start()
+    log.info("[POLLER] Bedrock poller thread started")
+
+
+def _bedrock_worker():
+    """Drains the queue one job at a time, with a delay between jobs to avoid throttling."""
+    import random
+    max_retries = 7
+    base_delay = 2.0
+    max_delay = 90.0
+    throttle_kw = ("Throttling", "Too many requests", "ThrottlingException", "Rate exceeded")
+
+    while True:
+        job = _bedrock_queue.get()
+        task_id = job["task_id"]
+        s3_uri = job["s3_uri"]
+        output_uri = job["output_uri"]
+        filename = job["filename"]
+        meta = job["meta"]
+
+        log.info("[QUEUE] Processing Bedrock start for %s (%s)", filename, task_id)
+        success = False
+        for attempt in range(1, max_retries + 1):
+            try:
+                result = start_video_embedding(s3_uri, output_uri)
+                arn = result.get("invocation_arn", "")
+                log.info("[QUEUE] Bedrock started: %s -> arn=%s", filename, arn[:80])
+
+                _tasks[task_id]["status"] = "indexing"
+                _tasks[task_id]["invocation_arn"] = arn
+                _tasks[task_id]["output_s3_uri"] = output_uri
+
+                for rec in vs_index():
+                    if rec.get("id") == task_id:
+                        rec.setdefault("metadata", {})["status"] = "indexing"
+                        break
+                vs_save()
+
+                with _poller_lock:
+                    _poller_jobs.append({
+                        "task_id": task_id,
+                        "invocation_arn": arn,
+                        "output_s3_uri": output_uri,
+                        "started_at": _time.monotonic(),
+                    })
+                success = True
+                break
+            except Exception as exc:
+                msg = str(exc)
+                is_throttle = any(kw in msg for kw in throttle_kw)
+                if is_throttle and attempt < max_retries:
+                    delay = min(max_delay, base_delay * (2 ** (attempt - 1))) + random.uniform(0, 1.5)
+                    log.warning("[QUEUE] %s throttled (attempt %d/%d), retry in %.1fs", filename, attempt, max_retries, delay)
+                    _time.sleep(delay)
+                    continue
+                log.error("[QUEUE] Bedrock start FAILED for %s: %s", filename, exc)
+                _tasks[task_id]["status"] = "failed"
+                _tasks[task_id]["error"] = msg
+                for rec in vs_index():
+                    if rec.get("id") == task_id:
+                        rec.setdefault("metadata", {})["status"] = "failed"
+                        rec["metadata"]["error"] = msg
+                        break
+                vs_save()
+                invalidate_video_cache()
+                break
+
+        if success:
+            _time.sleep(_BEDROCK_INTER_JOB_DELAY)
+
+        _bedrock_queue.task_done()
+
+
+def _bedrock_poller():
+    """Periodically poll Bedrock for job completion and finalize videos."""
+    while True:
+        _time.sleep(_POLL_INTERVAL)
+        with _poller_lock:
+            jobs = list(_poller_jobs)
+        if not jobs:
+            continue
+
+        done_ids = []
+        for job in jobs:
+            task_id = job["task_id"]
+            arn = job["invocation_arn"]
+            elapsed = _time.monotonic() - job["started_at"]
+            try:
+                inv = get_async_invocation(arn)
+                status = inv.get("status", "unknown").lower()
+                if status == "completed":
+                    log.info("[POLLER] Bedrock completed: %s", task_id)
+                    try:
+                        embs = load_video_embeddings_from_s3(job["output_s3_uri"])
+                        if embs:
+                            asset_emb = None
+                            for e in embs:
+                                if e.get("embeddingScope") == "asset":
+                                    asset_emb = e["embedding"]
+                                    break
+                            if not asset_emb:
+                                asset_emb = embs[0]["embedding"]
+                            if asset_emb:
+                                for rec in vs_index():
+                                    if rec.get("id") == task_id:
+                                        rec["embedding"] = asset_emb
+                                        rec.setdefault("metadata", {})["status"] = "ready"
+                                        rec["metadata"]["clip_count"] = len(embs)
+                                        rec["metadata"]["output_s3_uri"] = job["output_s3_uri"]
+                                        break
+                                vs_save()
+                    except Exception as exc:
+                        log.warning("[POLLER] Failed to load embeddings for %s: %s", task_id, exc)
+                    if task_id in _tasks:
+                        _tasks[task_id]["status"] = "ready"
+                    invalidate_video_cache()
+                    done_ids.append(task_id)
+                elif status == "failed":
+                    err = inv.get("error", "Unknown Bedrock error")
+                    log.error("[POLLER] Bedrock failed: %s -> %s", task_id, err)
+                    if task_id in _tasks:
+                        _tasks[task_id]["status"] = "failed"
+                        _tasks[task_id]["error"] = err
+                    for rec in vs_index():
+                        if rec.get("id") == task_id:
+                            rec.setdefault("metadata", {})["status"] = "failed"
+                            rec["metadata"]["error"] = err
+                            break
+                    vs_save()
+                    invalidate_video_cache()
+                    done_ids.append(task_id)
+                elif elapsed > _POLL_MAX_WAIT:
+                    log.warning("[POLLER] Timed out waiting for %s (%.0fs)", task_id, elapsed)
+                    done_ids.append(task_id)
+            except Exception as exc:
+                log.debug("[POLLER] Error polling %s: %s", task_id, exc)
+
+        if done_ids:
+            with _poller_lock:
+                _poller_jobs[:] = [j for j in _poller_jobs if j["task_id"] not in done_ids]
 
 
 def get_insights_cache_dir(video_id: str) -> Path:
@@ -126,6 +313,31 @@ def load_object_frame_from_disk(video_id: str, filename: str) -> bytes | None:
         return path.read_bytes()
     except Exception as e:
         log.warning("[CACHE] Failed to load object frame %s for video %s: %s", filename, video_id, e)
+        return None
+
+
+_TINY_THUMB_WIDTH = 120
+
+
+def make_tiny_thumbnail_b64(jpeg_bytes: bytes) -> str | None:
+    """Resize a JPEG thumbnail to a tiny version and return as a base64 string."""
+    if not jpeg_bytes:
+        return None
+    try:
+        from PIL import Image
+        import io as _io
+        img = Image.open(_io.BytesIO(jpeg_bytes))
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        w, h = img.size
+        if w > _TINY_THUMB_WIDTH:
+            ratio = _TINY_THUMB_WIDTH / w
+            img = img.resize((_TINY_THUMB_WIDTH, max(1, int(h * ratio))), Image.LANCZOS)
+        buf = _io.BytesIO()
+        img.save(buf, format="JPEG", quality=40, optimize=True)
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception as e:
+        log.debug("make_tiny_thumbnail_b64 failed: %s", e)
         return None
 
 

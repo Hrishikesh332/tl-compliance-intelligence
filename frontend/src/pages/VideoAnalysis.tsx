@@ -15,6 +15,7 @@ import checkmarkIconUrl from '../../strand/icons/checkmark.svg?url'
 import spinnerIconUrl from '../../strand/icons/spinner.svg?url'
 
 import { API_BASE } from '../config'
+import logoMarkSvg from '../../strand/assets/logo-mark.svg?raw'
 
 function toTitleCase(s: string): string {
   return s.replace(/\b\w/g, (c) => c.toUpperCase())
@@ -242,9 +243,11 @@ function formatTimelineTime(totalSeconds: number): string {
 function TimelineBar({
   segments,
   durationSeconds,
+  hideLabel,
 }: {
   segments: number[]
   durationSeconds?: number
+  hideLabel?: boolean
 }) {
   const n = segments.length
   const duration = durationSeconds ?? (n * 13)
@@ -254,7 +257,7 @@ function TimelineBar({
 
   return (
     <div className="mt-3 w-full">
-      <p className="mb-1.5 text-xs font-medium text-gray-500">Presence in video</p>
+      {!hideLabel && <p className="mb-1.5 text-xs font-medium text-gray-500">Presence in video</p>}
       <div className="flex gap-0.5 w-full h-2.5 rounded-sm overflow-hidden bg-gray-100">
         {segments.map((filled, i) => (
           <div
@@ -291,6 +294,70 @@ function fmtSecPdf(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
+/** TwelveLabs logo mark (Strand / brand asset). */
+function TwelveLabsLogoMark({ className = 'w-8 h-8', fill = 'currentColor' }: { className?: string; fill?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 50.27 36" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+      <rect x="10.83" y="12.36" width="15.89" height="2.14" rx="0.63" fill={fill} />
+      <rect x="0.00" y="12.36" width="8.71" height="2.14" rx="0.63" fill={fill} />
+      <rect x="30.67" y="12.36" width="9.94" height="2.14" rx="0.63" fill={fill} />
+      <rect x="32.10" y="9.28" width="8.52" height="2.15" rx="0.63" fill={fill} />
+      <rect x="41.74" y="9.28" width="6.76" height="2.15" rx="0.63" fill={fill} />
+      <rect x="38.86" y="6.14" width="7.70" height="2.15" rx="0.63" fill={fill} />
+      <rect x="41.30" y="3.07" width="2.26" height="2.15" rx="0.63" fill={fill} />
+      <rect x="18.36" y="27.71" width="3.92" height="2.15" rx="0.63" fill={fill} />
+      <rect x="25.16" y="27.71" width="2.56" height="2.15" rx="0.63" fill={fill} />
+      <rect x="28.91" y="27.71" width="6.92" height="2.15" rx="0.63" fill={fill} />
+      <rect x="32.38" y="24.64" width="2.87" height="2.14" rx="0.63" fill={fill} />
+      <rect x="12.96" y="27.71" width="2.26" height="2.15" rx="0.63" fill={fill} />
+      <rect x="23.41" y="30.78" width="2.26" height="2.15" rx="0.63" fill={fill} />
+      <rect x="21.19" y="33.86" width="2.16" height="2.14" rx="0.63" fill={fill} />
+      <rect x="29.75" y="0.00" width="2.81" height="2.15" rx="0.63" fill={fill} />
+      <rect x="13.79" y="9.28" width="7.18" height="2.15" rx="0.63" fill={fill} />
+      <rect x="27.10" y="3.07" width="4.36" height="2.15" rx="0.63" fill={fill} />
+      <rect x="24.42" y="6.14" width="7.03" height="2.15" rx="0.63" fill={fill} />
+      <rect x="46.30" y="12.36" width="4.11" height="2.14" rx="0.63" fill={fill} />
+      <rect x="7.56" y="15.43" width="20.28" height="2.15" rx="0.63" fill={fill} />
+      <rect x="25.97" y="21.57" width="7.92" height="2.15" rx="0.63" fill={fill} />
+      <rect x="10.83" y="18.50" width="25.76" height="2.15" rx="0.63" fill={fill} />
+      <rect x="6.89" y="21.57" width="9.58" height="2.15" rx="0.63" fill={fill} />
+      <rect x="15.64" y="24.64" width="3.14" height="2.14" rx="0.63" fill={fill} />
+      <rect x="26.72" y="24.64" width="3.38" height="2.14" rx="0.63" fill={fill} />
+      <rect x="9.84" y="24.64" width="3.18" height="2.14" rx="0.63" fill={fill} />
+      <rect x="30.67" y="15.43" width="8.19" height="2.15" rx="0.63" fill={fill} />
+      <rect x="32.57" y="6.12" width="2.26" height="2.15" rx="0.63" fill={fill} />
+    </svg>
+  )
+}
+
+/** Get natural dimensions of an image from a data URL (for PDF scaling without distortion). */
+function getImageDimensions(dataUrl: string): Promise<{ w: number; h: number }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight })
+    img.onerror = () => reject(new Error('Image load failed'))
+    img.src = dataUrl
+  })
+}
+
+/** Compute width/height in mm to fit within maxW x maxH while preserving aspect ratio. */
+function fitImageInBox(
+  naturalWidth: number,
+  naturalHeight: number,
+  maxW: number,
+  maxH: number
+): { w: number; h: number } {
+  if (naturalWidth <= 0 || naturalHeight <= 0) return { w: maxW, h: maxH }
+  const ratio = naturalWidth / naturalHeight
+  let w = maxW
+  let h = maxW / ratio
+  if (h > maxH) {
+    h = maxH
+    w = maxH * ratio
+  }
+  return { w, h }
+}
+
 function PdfReportModal({
   open,
   onClose,
@@ -313,33 +380,104 @@ function PdfReportModal({
   const detectedFacesCount = detectedFaces.length
 
   async function handleDownload() {
-    const doc = new jsPDF({ format: 'a4', unit: 'mm' })
-    const margin = 18
-    const footerH = 12
+    // Logo as white PNG for dark header (SVG uses currentColor → replace with white, render to canvas)
+    let logoPngDataUrl: string | null = null
+    try {
+      const whiteSvg = logoMarkSvg.replace(/fill="currentColor"/g, 'fill="#FFFFFF"')
+      const svgDataUrl = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(whiteSvg)))
+      logoPngDataUrl = await new Promise<string>((resolve, reject) => {
+        const img = new Image()
+        img.onload = () => {
+          const w = 100
+          const h = (36 / 50.27) * w
+          const canvas = document.createElement('canvas')
+          canvas.width = w
+          canvas.height = h
+          const ctx = canvas.getContext('2d')
+          if (!ctx) {
+            reject(new Error('No canvas context'))
+            return
+          }
+          ctx.drawImage(img, 0, 0, w, h)
+          resolve(canvas.toDataURL('image/png'))
+        }
+        img.onerror = () => reject(new Error('Logo load failed'))
+        img.src = svgDataUrl
+      })
+    } catch {
+      logoPngDataUrl = null
+    }
+
+    const doc = new jsPDF({ format: 'a4', unit: 'mm', orientation: 'portrait' })
+    const margin = 20
+    const footerH = 14
     const pageW = doc.internal.pageSize.getWidth()
     const pageH = doc.internal.pageSize.getHeight()
     const contentH = pageH - margin - footerH
     const maxW = pageW - margin * 2
     let y = margin
     let sectionNum = 0
-    const lineHeight = 5.5
-    const sectionGap = 12
-    const headingUnderline = 0.3
+    const lineHeight = 6
+    const sectionGap = 14
 
-    function checkPage(need: number = 24) {
+    // Theme: brand charcoal #1D1C1B, brand white #F4F3F3, accent grey #D3D1CF
+    const brandCharcoal = [29, 28, 27] as const
+    const brandWhite = [244, 243, 243] as const
+    const brandGrey = [211, 209, 207] as const
+    const accentGreen = [96, 226, 27] as const // #60E21B masterbrand green
+
+    const contentHeaderH = 20
+    const logoW = 11
+    const logoH = (36 / 50.27) * logoW
+    const reportTitle = title || 'Video Analysis'
+    function addContentPageHeader() {
+      doc.setFillColor(...brandCharcoal)
+      doc.rect(0, 0, pageW, contentHeaderH, 'F')
+      const logoY = (contentHeaderH - logoH) / 2
+      if (logoPngDataUrl) {
+        try {
+          doc.addImage(logoPngDataUrl, 'PNG', margin, logoY, logoW, logoH)
+        } catch {
+          /* skip if image fails */
+        }
+      }
+      const textX = margin + (logoPngDataUrl ? logoW + 5 : 0)
+      const textBaseline = contentHeaderH / 2
+      doc.setTextColor(...brandWhite)
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(9)
+      doc.text('TwelveLabs', textX, textBaseline - 3)
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(11)
+      doc.text('Compliance Intelligence Report', textX, textBaseline + 4)
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(9)
+      doc.setTextColor(220, 219, 218)
+      const titleStr = doc.splitTextToSize(reportTitle, pageW - margin * 2 - textX - 10)
+      doc.text(titleStr[0], pageW - margin, textBaseline + 2, { align: 'right' })
+      doc.setTextColor(0, 0, 0)
+      doc.setDrawColor(...accentGreen)
+      doc.setLineWidth(0.4)
+      doc.line(0, contentHeaderH, pageW, contentHeaderH)
+    }
+    function checkPage(need: number = 28) {
       if (y + need > contentH) {
         doc.addPage()
-        y = margin
+        addContentPageHeader()
+        y = margin + contentHeaderH
       }
     }
 
     function addFooter(pageNum: number, totalPages: number) {
+      const footerY = pageH - 7
+      doc.setDrawColor(...brandGrey)
+      doc.setLineWidth(0.2)
+      doc.line(margin, footerY - 5, pageW - margin, footerY - 5)
       doc.setFont('helvetica', 'normal')
       doc.setFontSize(8)
-      doc.setTextColor(120, 120, 120)
-      const footerY = pageH - 6
+      doc.setTextColor(143, 137, 132) // mid grey #8F8984
       doc.text(
-        `Compliance Intelligence Report  ·  ${title || 'Video'}  ·  Page ${pageNum} of ${totalPages}`,
+        `TwelveLabs  ·  Compliance Intelligence Report  ·  Page ${pageNum} of ${totalPages}`,
         margin,
         footerY
       )
@@ -352,80 +490,177 @@ function PdfReportModal({
       doc.setTextColor(0, 0, 0)
     }
 
+    // Tag/pill style (UI theme: light fill, grey border, charcoal text)
+    const tagPadH = 3
+    const tagPadV = 1.8
+    const tagGap = 2.5
+    const tagRadius = 2
+    const tagFontSize = 9
+    function drawTag(x: number, baselineY: number, label: string): number {
+      doc.setFontSize(tagFontSize)
+      doc.setFont('helvetica', 'normal')
+      const tw = doc.getTextWidth(label)
+      const w = tw + tagPadH * 2
+      const h = 5.5
+      const top = baselineY - h + 1.2
+      doc.setFillColor(244, 243, 243) // brand white / card
+      doc.setDrawColor(...brandGrey)
+      doc.setLineWidth(0.25)
+      doc.roundedRect(x, top, w, h, tagRadius, tagRadius, 'FD')
+      doc.setTextColor(...brandCharcoal)
+      doc.text(label, x + tagPadH, baselineY - 0.8)
+      doc.setTextColor(0, 0, 0)
+      return w
+    }
+    function addTagList(labels: string[]) {
+      if (!labels?.length) return
+      doc.setFontSize(tagFontSize)
+      doc.setFont('helvetica', 'normal')
+      let x = margin
+      const tagH = 5.5
+      const rowH = tagH + tagGap
+      for (const label of labels) {
+        const tw = doc.getTextWidth(label)
+        const w = tw + tagPadH * 2
+        if (x + w > pageW - margin && x > margin) {
+          x = margin
+          y += rowH
+          checkPage(rowH)
+        }
+        checkPage(rowH)
+        drawTag(x, y, label)
+        x += w + tagGap
+      }
+      y += rowH + 4
+    }
+
     function addSectionHeading(text: string, fontSize: number = 12) {
       sectionNum += 1
-      checkPage(16)
-      doc.setDrawColor(60, 60, 60)
-      doc.setLineWidth(headingUnderline)
-      doc.line(margin, y - 2, margin + 40, y - 2)
-      doc.setFontSize(9)
-      doc.setFont('helvetica', 'normal')
-      doc.setTextColor(100, 100, 100)
-      doc.text(`Section ${sectionNum}`, margin, y)
-      doc.setTextColor(0, 0, 0)
-      y += 5
+      checkPage(22)
+      y += 8
+      // Title first, then full-width underline below it
       doc.setFontSize(fontSize)
       doc.setFont('helvetica', 'bold')
+      doc.setTextColor(...brandCharcoal)
       doc.text(text, margin, y)
+      doc.setTextColor(0, 0, 0)
+      y += 4
+      doc.setDrawColor(...brandCharcoal)
+      doc.setLineWidth(0.5)
+      doc.line(margin, y, pageW - margin, y)
+      y += 6
       y += lineHeight + 4
     }
 
     function addBody(text: string, fontSize: number = 10) {
       doc.setFontSize(fontSize)
       doc.setFont('helvetica', 'normal')
+      doc.setTextColor(50, 50, 50)
       const lines = doc.splitTextToSize(text, maxW)
       for (const line of lines) {
         checkPage(lineHeight)
         doc.text(line, margin, y)
         y += lineHeight
       }
-      y += 4
+      doc.setTextColor(0, 0, 0)
+      y += 6
     }
 
-    // —— Cover page ——
-    doc.setFillColor(40, 40, 40)
-    doc.rect(0, 0, pageW, 32, 'F')
-    doc.setTextColor(255, 255, 255)
-    doc.setFontSize(18)
-    doc.setFont('helvetica', 'bold')
-    doc.text('Compliance Intelligence Report', margin, 20)
-    doc.setFontSize(11)
+    // —— Page 1: Header — TwelveLabs theme (charcoal, brand white, accent line) ——
+    const page1HeaderH = 46
+    doc.setFillColor(...brandCharcoal)
+    doc.rect(0, 0, pageW, page1HeaderH, 'F')
+    const logoW1 = 18
+    const logoH1 = (36 / 50.27) * logoW1
+    const logoY1 = (page1HeaderH - logoH1) / 2
+    if (logoPngDataUrl) {
+      try {
+        doc.addImage(logoPngDataUrl, 'PNG', margin, logoY1, logoW1, logoH1)
+      } catch {
+        /* skip if image fails */
+      }
+    }
+    const textStartX = margin + (logoPngDataUrl ? logoW1 + 8 : 0)
     doc.setFont('helvetica', 'normal')
-    doc.text('Video analysis, risk assessment & transcript', margin, 28)
+    doc.setFontSize(10)
+    doc.setTextColor(...brandWhite)
+    doc.text('TwelveLabs', textStartX, 18)
+    doc.setFontSize(8)
+    doc.setTextColor(200, 199, 198)
+    doc.text('REPORT', textStartX, 24)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(22)
+    doc.setTextColor(...brandWhite)
+    doc.text('Compliance Intelligence Report', textStartX, 32)
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(11)
+    doc.setTextColor(220, 219, 218)
+    doc.text('Video analysis, risk assessment & transcript', textStartX, 40)
+    doc.setDrawColor(...accentGreen)
+    doc.setLineWidth(0.6)
+    doc.line(0, page1HeaderH, pageW, page1HeaderH)
+
+    // Report details block — title prominent, theme styling
+    doc.setTextColor(0, 0, 0)
+    y = 58
+    const boxTop = y
+    const boxPad = 10
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(9)
+    doc.setTextColor(143, 137, 132)
+    doc.text('VIDEO', margin + boxPad, y + 6)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(18)
+    doc.setTextColor(...brandCharcoal)
+    const titleLines = doc.splitTextToSize(title || 'Video Analysis', maxW - boxPad * 2)
+    doc.text(titleLines[0], margin + boxPad, y + 14)
+    let titleY = y + 14
+    for (let i = 1; i < titleLines.length; i++) {
+      titleY += lineHeight + 1
+      doc.text(titleLines[i], margin + boxPad, titleY)
+    }
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(10)
+    doc.setTextColor(143, 137, 132)
+    doc.text(`Video ID: ${videoId}`, margin + boxPad, titleY + 12)
+    doc.text(`Generated: ${new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`, margin + boxPad, titleY + 20)
+    const boxBottom = titleY + 28
+    doc.setDrawColor(...brandGrey)
+    doc.setLineWidth(0.35)
+    doc.rect(margin, boxTop, maxW, boxBottom - boxTop, 'S')
     doc.setTextColor(0, 0, 0)
 
-    y = 50
-    doc.setFontSize(14)
-    doc.setFont('helvetica', 'bold')
-    doc.text(title || 'Video Analysis', margin, y)
-    y += lineHeight + 2
-    doc.setFontSize(10)
-    doc.setFont('helvetica', 'normal')
-    doc.setTextColor(80, 80, 80)
-    doc.text(`Video ID: ${videoId}`, margin, y)
-    y += lineHeight
-    doc.text(`Generated: ${new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`, margin, y)
-    doc.setTextColor(0, 0, 0)
-    y = pageH - footerH - 10
-    doc.setDrawColor(200, 200, 200)
-    doc.setLineWidth(0.5)
-    doc.line(margin, y, pageW - margin, y)
-    doc.addPage()
-    y = margin
+    // Continue on same page — divider then Executive summary
+    y = boxBottom + 18
+    doc.setDrawColor(...brandGrey)
+    doc.setLineWidth(0.25)
+    doc.line(margin, y - 6, pageW - margin, y - 6)
 
     // —— Executive summary ——
     addSectionHeading('Executive summary', 11)
+    const riskLabel = (riskLevel || '—').toUpperCase()
     const riskColor = riskLevel === 'high' ? [180, 60, 60] : riskLevel === 'medium' ? [180, 120, 40] : [60, 120, 80]
-    doc.setFillColor(riskColor[0], riskColor[1], riskColor[2])
-    doc.roundedRect(margin, y, 14, 8, 1.5, 1.5, 'F')
-    doc.setTextColor(255, 255, 255)
-    doc.setFontSize(9)
     doc.setFont('helvetica', 'bold')
-    doc.text((riskLevel || '—').toUpperCase(), margin + 3, y + 5.5)
+    doc.setFontSize(10)
+    const riskTextW = doc.getTextWidth(riskLabel)
+    const riskPadH = 5
+    const riskPadV = 2
+    const riskW = riskTextW + riskPadH * 2
+    const riskH = 7
+    const riskY = y
+    doc.setFillColor(riskColor[0], riskColor[1], riskColor[2])
+    doc.setDrawColor(riskColor[0], riskColor[1], riskColor[2])
+    doc.setLineWidth(0.2)
+    doc.roundedRect(margin, riskY, riskW, riskH, 2, 2, 'FD')
+    doc.setTextColor(255, 255, 255)
+    doc.text(riskLabel, margin + riskPadH, riskY + riskH - 2.4)
     doc.setTextColor(0, 0, 0)
     doc.setFont('helvetica', 'normal')
-    doc.text('  Risk level', margin + 17, y + 5.5)
-    y += 12
+    doc.setFontSize(9)
+    doc.setTextColor(100, 100, 100)
+    doc.text('Risk level', margin + riskW + 5, riskY + riskH - 2.2)
+    doc.setTextColor(0, 0, 0)
+    y += riskH + 6
     doc.setFontSize(10)
     addBody(
       [
@@ -444,14 +679,14 @@ function PdfReportModal({
     addSectionHeading('Description')
     addBody(description || 'No description available.')
 
-    // —— Categories & topics ——
+    // —— Categories & topics (as tags per UI theme) ——
     if (categories?.length) {
       addSectionHeading('Categories')
-      addBody(categories.join('  ·  '))
+      addTagList(categories)
     }
     if (topics?.length) {
       addSectionHeading('Topics')
-      addBody(topics.join('  ·  '))
+      addTagList(topics)
     }
 
     // —— Risk assessment ——
@@ -495,30 +730,35 @@ function PdfReportModal({
     if (detectedFacesCount > 0) {
       addSectionHeading('Detected faces')
       addBody(`${detectedFacesCount} unique face(s) detected from keyframes.`)
-      const imgSize = 22
+      const maxImgSize = 22
       const imgGap = 4
       for (let i = 0; i < detectedFaces.length; i++) {
         const face = detectedFaces[i]
-        checkPage(imgSize + 20)
+        checkPage(maxImgSize + 20)
+        let drawnW = maxImgSize
+        let drawnH = maxImgSize
         try {
           if (face.image_base64) {
-            doc.setDrawColor(220, 220, 220)
-            doc.setLineWidth(0.3)
-            doc.rect(margin, y, imgSize, imgSize)
-            doc.addImage(face.image_base64, 'PNG', margin, y, imgSize, imgSize)
+            const dataUrl = `data:image/png;base64,${face.image_base64}`
+            const dims = await getImageDimensions(dataUrl)
+            const fit = fitImageInBox(dims.w, dims.h, maxImgSize, maxImgSize)
+            drawnW = fit.w
+            drawnH = fit.h
+            doc.addImage(dataUrl, 'PNG', margin, y, drawnW, drawnH)
           }
         } catch {
           /* skip image if invalid */
         }
+        const textX = margin + drawnW + imgGap
         doc.setFont('helvetica', 'bold')
         doc.setFontSize(10)
-        doc.text(`Face ${i + 1}`, margin + imgSize + imgGap, y + 5)
+        doc.text(`Face ${i + 1}`, textX, y + 5)
         doc.setFont('helvetica', 'normal')
         doc.setFontSize(9)
-        doc.text(`Confidence: ${Math.round(face.confidence * 100)}%  ·  Appearances: ${face.appearance_count}`, margin + imgSize + imgGap, y + 11)
+        doc.text(`Confidence: ${Math.round(face.confidence * 100)}%  ·  Appearances: ${face.appearance_count}`, textX, y + 11)
         const tsStr = face.timestamps?.length ? face.timestamps.map(fmtSecPdf).join(', ') : '—'
-        doc.text(`Timestamps: ${tsStr}`, margin + imgSize + imgGap, y + 17)
-        y += imgSize + imgGap + 6
+        doc.text(`Timestamps: ${tsStr}`, textX, y + 17)
+        y += Math.max(drawnH, maxImgSize) + imgGap + 6
       }
       y += sectionGap
     }
@@ -545,58 +785,83 @@ function PdfReportModal({
           }
         })
       )
-      const objImgSize = 28
+      const maxObjW = 35
+      const maxObjH = 26
       const objImgGap = 6
       for (let i = 0; i < objects.length; i++) {
         const obj = objects[i]
-        checkPage(objImgSize + 14)
         const dataUrl = objectImages[i]
+        let drawnW = 0
+        let drawnH = 0
         if (dataUrl) {
           try {
+            const dims = await getImageDimensions(dataUrl)
+            const fit = fitImageInBox(dims.w, dims.h, maxObjW, maxObjH)
+            drawnW = fit.w
+            drawnH = fit.h
+            checkPage(drawnH + 14)
             doc.setDrawColor(220, 220, 220)
             doc.setLineWidth(0.2)
-            doc.rect(margin, y, objImgSize, objImgSize * 0.75)
-            doc.addImage(dataUrl, 'JPEG', margin, y, objImgSize, objImgSize * 0.75)
+            doc.rect(margin, y, drawnW, drawnH)
+            const format = dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG'
+            doc.addImage(dataUrl, format, margin, y, drawnW, drawnH)
           } catch {
-            /* skip */
+            checkPage(maxObjH + 14)
           }
+        } else {
+          checkPage(lineHeight * 2 + 4)
         }
+        const textX = margin + (drawnW > 0 ? drawnW + objImgGap : 0)
         doc.setFont('helvetica', 'bold')
         doc.setFontSize(10)
-        doc.text(obj.object || 'Object', margin + (dataUrl ? objImgSize + objImgGap : 0), y + 5)
+        doc.text(obj.object || 'Object', textX, y + 5)
         doc.setFont('helvetica', 'normal')
         doc.setFontSize(9)
-        doc.text(`Timestamp: ${fmtSecPdf(obj.timestamp)}`, margin + (dataUrl ? objImgSize + objImgGap : 0), y + 12)
-        const rowH = dataUrl ? objImgSize * 0.75 + objImgGap : lineHeight * 2 + 2
+        doc.text(`Timestamp: ${fmtSecPdf(obj.timestamp)}`, textX, y + 12)
+        const rowH = drawnH > 0 ? drawnH + objImgGap : lineHeight * 2 + 2
         y += rowH + 6
       }
       y += sectionGap
     }
 
-    // —— Transcript ——
+    // —— Transcript: line height adapts per segment (tighter so height = f(number of lines)) ——
     addSectionHeading('Transcript')
+    const transcriptTimeColW = 12
+    const transcriptTextW = maxW - transcriptTimeColW
+    const transcriptLineColor = [220, 218, 216] as const
+    // Tighter line height for transcript so each segment height reflects its line count (9pt ~3.2mm + small gap)
+    const transcriptLineHeight = 4.5
+    const transcriptGapAboveLine = 5
+    const transcriptGapBelowLine = 2.5
     if (transcript?.length) {
       doc.setFontSize(9)
       doc.setTextColor(80, 80, 80)
       doc.text(`${transcript.length} segment(s)`, margin, y)
       doc.setTextColor(0, 0, 0)
-      y += lineHeight + 4
+      y += lineHeight + 3
       for (let idx = 0; idx < transcript.length; idx++) {
         const seg = transcript[idx]
-        checkPage(lineHeight * 3)
+        checkPage(transcriptLineHeight * 4)
         doc.setFont('helvetica', 'bold')
         doc.setFontSize(9)
         doc.text(seg.time || '0:00', margin, y)
         doc.setFont('helvetica', 'normal')
-        const textLines = doc.splitTextToSize(seg.text || '', maxW - 14)
-        doc.text(textLines[0], margin + 14, y)
-        y += lineHeight
+        doc.setFontSize(9)
+        const textLines = doc.splitTextToSize(seg.text || '', transcriptTextW)
+        doc.text(textLines[0], margin + transcriptTimeColW, y)
+        y += transcriptLineHeight
         for (let i = 1; i < textLines.length; i++) {
-          checkPage(lineHeight)
-          doc.text(textLines[i], margin + 14, y)
-          y += lineHeight
+          checkPage(transcriptLineHeight)
+          doc.text(textLines[i], margin + transcriptTimeColW, y)
+          y += transcriptLineHeight
         }
-        y += 4
+        if (idx < transcript.length - 1) {
+          y += transcriptGapAboveLine
+          doc.setDrawColor(...transcriptLineColor)
+          doc.setLineWidth(0.3)
+          doc.line(margin, y, pageW - margin, y)
+          y += transcriptGapBelowLine
+        }
       }
     } else {
       addBody('No transcript available. Generate transcript from the Transcript section.')
@@ -616,19 +881,26 @@ function PdfReportModal({
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-3 sm:p-4">
       <div className="absolute inset-0 bg-brand-charcoal/40 backdrop-blur-sm" onClick={onClose} aria-hidden />
       <div
-        className="relative w-full max-w-2xl max-h-[90vh] flex flex-col rounded-xl border border-border bg-surface shadow-xl"
+        className="relative w-full max-w-2xl max-h-[90vh] flex flex-col rounded-xl border border-border bg-background shadow-2xl overflow-hidden"
         role="dialog"
         aria-modal="true"
         aria-labelledby="pdf-report-title"
       >
-        <div className="flex items-center justify-between border-b border-border px-5 py-4 shrink-0">
-          <h2 id="pdf-report-title" className="text-lg font-semibold text-text-primary">
-            PDF Report
-          </h2>
+        {/* TwelveLabs-themed header */}
+        <div className="flex items-center justify-between shrink-0 px-5 py-4 bg-brand-charcoal text-brand-white border-b border-white/10">
+          <div className="flex items-center gap-3 min-w-0">
+            <TwelveLabsLogoMark className="h-8 w-8 shrink-0 text-brand-white" fill="#F4F3F3" />
+            <div className="min-w-0">
+              <h2 id="pdf-report-title" className="font-brand text-lg font-semibold text-brand-white truncate">
+                Compliance Intelligence Report
+              </h2>
+              <p className="text-xs text-brand-white/70 mt-0.5">Video analysis & risk assessment</p>
+            </div>
+          </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-lg text-text-tertiary hover:bg-card hover:text-text-primary transition-colors"
+            className="p-2 rounded-lg text-brand-white/80 hover:bg-white/10 hover:text-brand-white transition-colors shrink-0"
             aria-label="Close"
           >
             <svg className="w-5 h-5" viewBox="0 0 12 12" fill="currentColor">
@@ -637,113 +909,136 @@ function PdfReportModal({
             </svg>
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-5 bg-card">
-          <div className="bg-surface rounded-lg border border-border shadow-sm p-6 text-text-primary space-y-5">
-            <p className="text-xs text-text-tertiary uppercase tracking-wider">Compliance Intelligence Report</p>
-            <h3 className="text-lg font-semibold text-text-primary">{toTitleCase(title)}</h3>
-            <p className="text-sm text-text-secondary">Video ID: {videoId} · Generated: {new Date().toLocaleDateString()}</p>
-
-            {description && (
-              <div className="border-t border-border pt-4">
-                <p className="text-xs font-medium text-text-tertiary uppercase mb-2">Description</p>
-                <p className="text-sm text-text-secondary whitespace-pre-wrap">{description}</p>
+        <div className="flex-1 overflow-y-auto p-5 bg-[var(--strand-masterbrand-offWhite,#ECECEC)]">
+          <div className="bg-surface rounded-xl border border-[var(--strand-masterbrand-lightGrey,#D3D1CF)] shadow-sm overflow-hidden text-text-primary">
+            {/* Report header */}
+            <div className="bg-brand-charcoal text-brand-white px-6 py-5">
+              <div className="flex items-center gap-2 mb-2">
+                <TwelveLabsLogoMark className="h-6 w-6 shrink-0" fill="#F4F3F3" />
+                <span className="font-brand text-xs font-medium uppercase tracking-widest text-brand-white/80">TwelveLabs</span>
               </div>
-            )}
-
-            {categories?.length > 0 && (
-              <div className="border-t border-border pt-4">
-                <p className="text-xs font-medium text-text-tertiary uppercase mb-2">Categories</p>
-                <p className="text-sm text-text-secondary">{categories.join(' · ')}</p>
+              <p className="text-[11px] font-medium uppercase tracking-widest text-brand-white/70">Compliance Intelligence Report</p>
+              <h3 className="mt-1.5 font-brand text-xl font-semibold leading-tight text-brand-white">{toTitleCase(title)}</h3>
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-brand-white/90">
+                <span>Video ID: {videoId.slice(0, 8)}…</span>
+                <span>Generated: {new Date().toLocaleDateString(undefined, { dateStyle: 'medium' })}</span>
               </div>
-            )}
-
-            {topics?.length > 0 && (
-              <div className="border-t border-border pt-4">
-                <p className="text-xs font-medium text-text-tertiary uppercase mb-2">Topics</p>
-                <p className="text-sm text-text-secondary">{topics.join(' · ')}</p>
-              </div>
-            )}
-
-            <div className="border-t border-border pt-4">
-              <p className="text-xs font-medium text-text-tertiary uppercase mb-2">Risk level</p>
-              <p className="text-sm font-medium capitalize">{riskLevel}</p>
+              {riskLevel && (
+                <span
+                  className={`mt-3 inline-block rounded-md px-2.5 py-1 text-xs font-semibold uppercase ${
+                    riskLevel === 'high' ? 'bg-red-500/90 text-white' : riskLevel === 'medium' ? 'bg-amber-500/90 text-white' : 'bg-emerald-500/90 text-white'
+                  }`}
+                >
+                  {riskLevel} risk
+                </span>
+              )}
             </div>
 
-            {risks?.length > 0 && (
-              <div className="border-t border-border pt-4">
-                <p className="text-xs font-medium text-gray-500 uppercase mb-2">Key findings</p>
-                <ul className="space-y-1.5 text-sm">
-                  {risks.map((r, i) => (
-                    <li key={i} className="flex justify-between gap-2">
-                      <span>{r.label}</span>
-                      <span className={`shrink-0 text-xs font-medium capitalize ${r.severity === 'high' ? 'text-error' : r.severity === 'medium' ? 'text-warning' : 'text-success'}`}>{r.severity}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            <div className="space-y-0">
+              {description && (
+                <section className="border-b border-border px-6 py-4">
+                  <h4 className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-2">Description</h4>
+                  <p className="text-sm leading-relaxed text-text-secondary whitespace-pre-wrap">{description}</p>
+                </section>
+              )}
 
-            {detectedFacesCount > 0 && (
-              <div className="border-t border-border pt-4">
-                <p className="text-xs font-medium text-text-tertiary uppercase mb-2">Detected faces ({detectedFacesCount})</p>
-                <div className="flex flex-wrap gap-4">
-                  {detectedFaces.map((face, i) => (
-                    <div key={i} className="flex items-start gap-3">
-                      <img src={`data:image/png;base64,${face.image_base64}`} alt="" className="w-14 h-14 rounded-full object-cover border border-border" />
-                      <div className="text-sm text-text-secondary">
-                        <p className="font-medium text-text-primary">Face {i + 1}</p>
-                        <p>Confidence: {Math.round(face.confidence * 100)}% · Appearances: {face.appearance_count}</p>
-                        <p className="text-xs text-text-tertiary">Timestamps: {face.timestamps?.length ? face.timestamps.map(fmtSecPdf).join(', ') : '—'}</p>
-                      </div>
+              {(categories?.length > 0 || topics?.length > 0) && (
+                <section className="border-b border-border px-6 py-4">
+                  {categories?.length > 0 && (
+                    <div className="mb-3">
+                      <h4 className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-1.5">Categories</h4>
+                      <p className="text-sm text-text-secondary">{categories.join(' · ')}</p>
                     </div>
-                  ))}
-                </div>
-                <p className="text-xs text-text-tertiary mt-2">All face snapshots included in PDF.</p>
-              </div>
-            )}
+                  )}
+                  {topics?.length > 0 && (
+                    <div>
+                      <h4 className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-1.5">Topics</h4>
+                      <p className="text-sm text-text-secondary">{topics.join(' · ')}</p>
+                    </div>
+                  )}
+                </section>
+              )}
 
-            {objectsCount > 0 && (
-              <div className="border-t border-border pt-4">
-                <p className="text-xs font-medium text-text-tertiary uppercase mb-2">Detected objects ({objectsCount})</p>
-                <ul className="space-y-2">
-                  {objects.map((obj, i) => (
-                    <li key={i} className="flex items-center gap-3 text-sm">
-                      {obj.frame_url && (
-                        <img src={`${API_BASE}${obj.frame_url}`} alt="" className="w-16 h-12 rounded border border-border object-cover" />
-                      )}
-                      <span className="font-medium text-text-primary">{obj.object}</span>
-                      <span className="text-text-tertiary">at {fmtSecPdf(obj.timestamp)}</span>
-                    </li>
-                  ))}
-                </ul>
-                <p className="text-xs text-text-tertiary mt-2">Object snapshots and timestamps included in PDF.</p>
-              </div>
-            )}
-
-            <div className="border-t border-border pt-4">
-              <p className="text-xs font-medium text-text-tertiary uppercase mb-2">Transcript ({transcript?.length ?? 0} segments)</p>
-              <div className="max-h-48 overflow-y-auto rounded border border-border bg-card p-3 text-sm">
-                {transcript?.length ? (
+              {risks?.length > 0 && (
+                <section className="border-b border-border px-6 py-4">
+                  <h4 className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-2">Key findings</h4>
                   <ul className="space-y-2">
-                    {transcript.slice(0, 20).map((seg, i) => (
-                      <li key={i}>
-                        <span className="text-text-tertiary font-mono text-xs mr-2">{seg.time}</span>
-                        <span className="text-text-secondary">{seg.text}</span>
+                    {risks.map((r, i) => (
+                      <li key={i} className="flex items-start justify-between gap-3 text-sm">
+                        <span className="text-text-primary">{r.label}</span>
+                        <span className={`shrink-0 rounded px-2 py-0.5 text-xs font-semibold capitalize ${r.severity === 'high' ? 'bg-red-100 text-red-800' : r.severity === 'medium' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}`}>
+                          {r.severity}
+                        </span>
                       </li>
                     ))}
-                    {transcript.length > 20 && (
-                      <li className="text-text-tertiary text-xs">… and {transcript.length - 20} more (included in PDF)</li>
-                    )}
                   </ul>
-                ) : (
-                  <p className="text-text-tertiary text-sm">No transcript. Generate from the Transcript section.</p>
-                )}
-              </div>
+                </section>
+              )}
+
+              {detectedFacesCount > 0 && (
+                <section className="border-b border-border px-6 py-4">
+                  <h4 className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-3">Detected faces ({detectedFacesCount})</h4>
+                  <div className="flex flex-wrap gap-4">
+                    {detectedFaces.map((face, i) => (
+                      <div key={i} className="flex items-start gap-3">
+                        <img src={`data:image/png;base64,${face.image_base64}`} alt="" className="h-14 w-14 shrink-0 rounded-lg border border-border object-cover" />
+                        <div className="min-w-0 text-sm">
+                          <p className="font-medium text-text-primary">Face {i + 1}</p>
+                          <p className="text-text-secondary">Confidence: {Math.round(face.confidence * 100)}% · Appearances: {face.appearance_count}</p>
+                          <p className="text-xs text-text-tertiary mt-0.5">Timestamps: {face.timestamps?.length ? face.timestamps.map(fmtSecPdf).join(', ') : '—'}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-xs text-text-tertiary">All face snapshots included in downloaded PDF.</p>
+                </section>
+              )}
+
+              {objectsCount > 0 && (
+                <section className="border-b border-border px-6 py-4">
+                  <h4 className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-3">Detected objects ({objectsCount})</h4>
+                  <ul className="space-y-3">
+                    {objects.map((obj, i) => (
+                      <li key={i} className="flex items-center gap-3 text-sm">
+                        {obj.frame_url && (
+                          <img src={`${API_BASE}${obj.frame_url}`} alt="" className="h-12 w-16 shrink-0 rounded-lg border border-border object-cover" />
+                        )}
+                        <div className="min-w-0">
+                          <span className="font-medium text-text-primary">{obj.object}</span>
+                          <span className="text-text-tertiary ml-1.5">at {fmtSecPdf(obj.timestamp)}</span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-2 text-xs text-text-tertiary">Object snapshots and timestamps included in downloaded PDF.</p>
+                </section>
+              )}
+
+              <section className="px-6 py-4">
+                <h4 className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-2">Transcript ({transcript?.length ?? 0} segments)</h4>
+                <div className="max-h-52 overflow-y-auto rounded-lg border border-border bg-card/50 p-4 text-sm">
+                  {transcript?.length ? (
+                    <ul className="space-y-2.5">
+                      {transcript.slice(0, 20).map((seg, i) => (
+                        <li key={i} className="leading-snug">
+                          <span className="font-mono text-xs text-text-tertiary mr-2 tabular-nums">{seg.time}</span>
+                          <span className="text-text-secondary">{seg.text}</span>
+                        </li>
+                      ))}
+                      {transcript.length > 20 && (
+                        <li className="pt-1 text-xs text-text-tertiary">… and {transcript.length - 20} more segments in PDF.</li>
+                      )}
+                    </ul>
+                  ) : (
+                    <p className="text-text-tertiary text-sm">No transcript. Generate from the Transcript section.</p>
+                  )}
+                </div>
+                <p className="mt-3 text-xs text-text-tertiary">Download PDF for full report with all snapshots and complete transcript.</p>
+              </section>
             </div>
-            <p className="text-xs text-text-tertiary">Download for full PDF including face & object snapshots, insights, and complete transcript.</p>
           </div>
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-3 sm:px-5 py-4 shrink-0 bg-surface rounded-b-xl">
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-4 sm:px-5 py-4 shrink-0 bg-surface">
           <Button variant="ghosted-black" size="regular" onClick={onClose}>Close</Button>
           <Button variant="black" size="regular" onClick={handleDownload}>Download PDF</Button>
         </div>
@@ -1057,6 +1352,8 @@ export default function VideoAnalysis() {
   const [showAllTranscript, setShowAllTranscript] = useState(false)
   const [appendTranscriptLoading, setAppendTranscriptLoading] = useState(false)
   const [appendTranscriptError, setAppendTranscriptError] = useState<string | null>(null)
+  const [facePresence, setFacePresence] = useState<{ duration_sec: number; segments: number; presence: Array<{ face_id: number; segment_presence: number[] }> } | null>(null)
+  const [facePresenceLoading, setFacePresenceLoading] = useState(false)
   const playerRef = useRef<VideoPlayerHandle>(null)
   const sidebarPlayerRef = useRef<VideoPlayerHandle>(null)
   const [chatPanelOpen, setChatPanelOpen] = useState(false)
@@ -1091,6 +1388,29 @@ export default function VideoAnalysis() {
       })
       .finally(() => setInsightsLoading(false))
   }, [videoId])
+
+  // Fetch accurate face presence timeline (separate API) when we have detected faces
+  useEffect(() => {
+    if (!videoId || !detectedFaces.length) {
+      setFacePresence(null)
+      return
+    }
+    setFacePresenceLoading(true)
+    setFacePresence(null)
+    fetch(`${API_BASE}/api/videos/${encodeURIComponent(videoId)}/face-presence`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.presence && Array.isArray(data.presence) && data.presence.length === detectedFaces.length) {
+          setFacePresence({
+            duration_sec: data.duration_sec ?? videoDurationSec,
+            segments: data.segments ?? 0,
+            presence: data.presence,
+          })
+        }
+      })
+      .catch(() => setFacePresence(null))
+      .finally(() => setFacePresenceLoading(false))
+  }, [videoId, detectedFaces.length, insights])
 
   async function generateInsights() {
     if (!videoId) return
@@ -1588,6 +1908,49 @@ export default function VideoAnalysis() {
                         </div>
                       ))}
                     </div>
+                    {/* Per-person presence across video timeline (from face-presence API when available) */}
+                    {videoDurationSec > 0 && (
+                      <div className="mt-4 space-y-3">
+                        <p className="text-xs font-medium text-gray-500">Presence in video</p>
+                        {facePresenceLoading && (
+                          <p className="text-xs text-gray-500 flex items-center gap-2">
+                            <img src={spinnerIconUrl} alt="" className="w-3.5 h-3.5 animate-spin" aria-hidden />
+                            Computing accurate timeline…
+                          </p>
+                        )}
+                        {!facePresenceLoading && detectedFaces.map((face, idx) => {
+                          const apiEntry = facePresence?.presence?.find((p) => p.face_id === face.face_id) ?? facePresence?.presence?.[idx]
+                          const segments = apiEntry?.segment_presence?.length
+                            ? apiEntry.segment_presence
+                            : (() => {
+                                const n = 20
+                                const segDur = videoDurationSec / n
+                                const timestamps = Array.isArray(face.timestamps) ? face.timestamps : []
+                                return Array.from({ length: n }, (_, i) => {
+                                  const t0 = i * segDur
+                                  const t1 = (i + 1) * segDur
+                                  return timestamps.some((t: number) => t >= t0 && t < t1) ? 1 : 0
+                                })
+                              })()
+                          const duration = facePresence?.duration_sec ?? videoDurationSec
+                          return (
+                            <div key={face.face_id} className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-full overflow-hidden bg-gray-200 shrink-0 ring-1 ring-gray-300">
+                                <img
+                                  src={`data:image/png;base64,${face.image_base64}`}
+                                  alt=""
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs text-gray-600 mb-0.5">Person {idx + 1}</p>
+                                <TimelineBar segments={segments} durationSeconds={duration} hideLabel />
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
                   </>
                 ) : (
                   <>

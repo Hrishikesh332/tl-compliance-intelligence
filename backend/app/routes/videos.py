@@ -1,4 +1,5 @@
 import logging
+import random
 import subprocess
 import time as _time
 
@@ -9,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from app.services.s3_store import upload_video, upload_thumbnail, get_presigned_url, S3_EMBEDDINGS_OUTPUT
 from app.services.vector_store import FIXED_INDEX_ID, add as index_add, get_entry as index_get_entry, _save as vs_save, _index as vs_index
 
-from app.utils.faces import detect_and_crop_faces, deduplicate_faces, embed_face_crop
+from app.utils.faces import detect_and_crop_faces, deduplicate_faces, embed_face_crop, _cosine as face_cosine_sim
 from app.utils.video_helpers import (
     get_tasks,
     invalidate_video_cache,
@@ -17,9 +18,11 @@ from app.utils.video_helpers import (
     video_id_to_presigned_url,
     get_frame_bytes,
     extract_duration_and_thumbnail,
+    make_tiny_thumbnail_b64,
     is_frame_blurred,
     get_video_list_cache,
     set_video_list_cache,
+    enqueue_bedrock_start,
     VIDEO_ANALYSIS_PROMPT,
     parse_video_analysis_response,
     normalize_video_analysis,
@@ -32,10 +35,35 @@ from app.utils.video_helpers import (
     load_face_from_disk,
     save_object_frame_to_disk,
     load_object_frame_from_disk,
+    clips_above_threshold,
 )
 from app.services.bedrock_pegasus import analyze_video as pegasus_analyze_video
 
 log = logging.getLogger("app.routes.videos")
+
+_THROTTLE_KEYWORDS = ("Throttling", "Too many requests", "ThrottlingException", "Rate exceeded")
+_MAX_RETRIES = 7
+_BASE_DELAY_SEC = 2.0
+_MAX_DELAY_SEC = 90.0
+
+
+def _retry_bedrock_call(fn, *, label: str = "bedrock_call"):
+    """Call *fn* with exponential backoff on Bedrock throttling errors."""
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            msg = str(exc)
+            if not any(kw in msg for kw in _THROTTLE_KEYWORDS) or attempt >= _MAX_RETRIES:
+                raise
+            delay = min(_MAX_DELAY_SEC, _BASE_DELAY_SEC * (2 ** (attempt - 1))) + random.uniform(0.0, 1.5)
+            log.warning(
+                "%s throttled (attempt %d/%d). Retrying in %.1fs ...",
+                label, attempt, _MAX_RETRIES, delay,
+            )
+            _time.sleep(delay)
+    raise RuntimeError(f"{label}: exhausted {_MAX_RETRIES} retries")
+
 
 videos_bp = Blueprint("videos", __name__)
 
@@ -77,54 +105,45 @@ def api_upload_video():
         except Exception as e:
             log.warning("Thumbnail upload failed (non-fatal): %s", e)
 
+    output_uri = f"{S3_EMBEDDINGS_OUTPUT}/{task_id}"
+    meta = {
+        "filename": file.filename,
+        "s3_uri": info["s3_uri"],
+        "s3_key": info["s3_key"],
+        "uploaded_at": info["uploaded_at"],
+        "status": "queued",
+    }
+    if duration_seconds is not None:
+        meta["duration_seconds"] = duration_seconds
+    if thumbnail_s3_key:
+        meta["thumbnail_s3_key"] = thumbnail_s3_key
+    if thumb_bytes:
+        tiny_b64 = make_tiny_thumbnail_b64(thumb_bytes)
+        if tiny_b64:
+            meta["thumbnail_base64"] = tiny_b64
+    if tags:
+        meta["tags"] = tags
+    index_add(id=task_id, embedding=[0.0] * 512, metadata=meta, type="video")
+
     tasks = get_tasks()
-    try:
-        output_uri = f"{S3_EMBEDDINGS_OUTPUT}/{task_id}"
-        from app.services.bedrock_marengo import start_video_embedding
-        result = start_video_embedding(info["s3_uri"], output_uri)
-        log.info("Embedding task started: video_id=%s arn=%s", task_id, result.get("invocation_arn", "")[:80])
-        tasks[task_id] = {
-            "task_id": task_id,
-            "filename": file.filename,
-            "status": "indexing",
-            "s3_uri": info["s3_uri"],
-            "s3_key": info["s3_key"],
-            "invocation_arn": result["invocation_arn"],
-            "output_s3_uri": output_uri,
-            "uploaded_at": info["uploaded_at"],
-        }
-        meta = {
-            "filename": file.filename,
-            "s3_uri": info["s3_uri"],
-            "s3_key": info["s3_key"],
-            "uploaded_at": info["uploaded_at"],
-            "status": "indexing",
-        }
-        if duration_seconds is not None:
-            meta["duration_seconds"] = duration_seconds
-        if thumbnail_s3_key:
-            meta["thumbnail_s3_key"] = thumbnail_s3_key
-        if tags:
-            meta["tags"] = tags
-        index_add(id=task_id, embedding=[0.0] * 512, metadata=meta, type="video")
-    except Exception as e:
-        log.error("Embedding start FAILED: video_id=%s error=%s", task_id, e, exc_info=True)
-        tasks[task_id] = {
-            "task_id": task_id,
-            "filename": file.filename,
-            "status": "failed",
-            "error": str(e),
-            "s3_uri": info["s3_uri"],
-            "s3_key": info["s3_key"],
-            "uploaded_at": info["uploaded_at"],
-        }
-        return jsonify({"error": str(e), "video_id": task_id, "s3_uri": info["s3_uri"]}), 500
+    tasks[task_id] = {
+        "task_id": task_id,
+        "filename": file.filename,
+        "status": "queued",
+        "s3_uri": info["s3_uri"],
+        "s3_key": info["s3_key"],
+        "output_s3_uri": output_uri,
+        "uploaded_at": info["uploaded_at"],
+    }
+
+    enqueue_bedrock_start(task_id, info["s3_uri"], output_uri, file.filename, meta)
+
     invalidate_video_cache()
-    log.info("Upload complete: video_id=%s filename=%s", task_id, file.filename)
+    log.info("Upload complete (queued for indexing): video_id=%s filename=%s", task_id, file.filename)
     return jsonify({
         "task_id": task_id,
         "filename": file.filename,
-        "status": "indexing",
+        "status": "queued",
         "s3_uri": info["s3_uri"],
         "indexId": FIXED_INDEX_ID,
     })
@@ -135,6 +154,52 @@ def api_list_tasks():
     tasks = list(get_tasks().values())
     tasks.sort(key=lambda t: t.get("uploaded_at", ""), reverse=True)
     return jsonify({"tasks": tasks, "count": len(tasks)})
+
+
+@videos_bp.route("/<video_id>/reindex", methods=["POST"])
+def api_reindex_video(video_id: str):
+    """Re-trigger Bedrock embedding for a video that is already in S3 (e.g. status=failed or stuck indexing)."""
+    video_id = (video_id or "").strip()
+    if not video_id:
+        return jsonify({"error": "video_id is required"}), 400
+    entry = index_get_entry(video_id)
+    if not entry:
+        return jsonify({"error": "Video not found in index", "video_id": video_id}), 404
+    meta = entry.get("metadata") or {}
+    s3_uri = video_id_to_s3_uri(video_id)
+    if not s3_uri:
+        return jsonify({
+            "error": "Video has no S3 location (s3_key/s3_uri). Cannot reindex.",
+            "video_id": video_id,
+        }), 400
+    output_uri = f"{S3_EMBEDDINGS_OUTPUT}/{video_id}"
+    tasks = get_tasks()
+    tasks[video_id] = {
+        "task_id": video_id,
+        "filename": meta.get("filename", video_id),
+        "status": "queued",
+        "s3_uri": s3_uri,
+        "s3_key": meta.get("s3_key", ""),
+        "output_s3_uri": output_uri,
+        "uploaded_at": meta.get("uploaded_at", ""),
+    }
+    for rec in vs_index():
+        if rec.get("id") == video_id:
+            rec.setdefault("metadata", {})["status"] = "queued"
+            rec["metadata"]["output_s3_uri"] = output_uri
+            rec["metadata"].pop("error", None)
+            break
+    vs_save()
+    enqueue_bedrock_start(video_id, s3_uri, output_uri, meta.get("filename", video_id), meta)
+    invalidate_video_cache()
+    log.info("Reindex queued: video_id=%s filename=%s", video_id, meta.get("filename"))
+    return jsonify({
+        "task_id": video_id,
+        "filename": meta.get("filename", video_id),
+        "status": "queued",
+        "s3_uri": s3_uri,
+        "indexId": FIXED_INDEX_ID,
+    })
 
 
 @videos_bp.route("/tasks/<task_id>", methods=["GET"])
@@ -188,6 +253,8 @@ def api_list_videos():
     now = _time.monotonic()
     if cache and (now - cache_ts) < ttl:
         return jsonify(cache)
+
+    t0 = _time.perf_counter()
     entries = index_list(type_filter="video")
 
     def _resolve_urls(entry: dict) -> None:
@@ -205,12 +272,16 @@ def api_list_videos():
             except Exception:
                 entry["thumbnail_url"] = None
         entry["duration_seconds"] = meta.get("duration_seconds")
+        tb64 = meta.get("thumbnail_base64")
+        if tb64:
+            entry["thumbnail_data_url"] = f"data:image/jpeg;base64,{tb64}"
 
-    with ThreadPoolExecutor(max_workers=min(len(entries), 10)) as pool:
+    with ThreadPoolExecutor(max_workers=min(len(entries) or 1, 20)) as pool:
         list(pool.map(_resolve_urls, entries))
 
     result = {"indexId": FIXED_INDEX_ID, "count": len(entries), "videos": entries}
     set_video_list_cache(result)
+    log.info("Video list built in %.0fms (%d videos)", (_time.perf_counter() - t0) * 1000, len(entries))
     return jsonify(result)
 
 
@@ -540,7 +611,8 @@ def api_video_insights(video_id: str):
 
         keyframe_ts_set = {round(kf["timestamp"], 1) for kf in face_keyframes}
         # Add uniform samples across the video so faces at non-keyframe times are not missed
-        n_uniform = 14
+        # (more samples help catch a second person who appears at different times)
+        n_uniform = 22
         step_sec = max(video_duration_sec / (n_uniform + 1), 2.0)
         uniform_timestamps = [round(step_sec * (i + 1), 1) for i in range(n_uniform)]
         # Only add uniform t if not already within 2.5s of a keyframe (avoid duplicate frames)
@@ -661,7 +733,9 @@ def api_video_insights(video_id: str):
         idx = vs_index()
         for rec in idx:
             if rec.get("id") == video_id:
-                rec.setdefault("metadata", {})["video_insights"] = insights_to_save
+                meta = rec.setdefault("metadata", {})
+                meta["video_insights"] = insights_to_save
+                meta.pop("face_presence", None)  # force face-presence API to recompute with new faces
                 break
         vs_save()
         invalidate_video_cache()
@@ -675,3 +749,163 @@ def api_video_insights(video_id: str):
     except Exception as e:
         log.error("[INSIGHTS] FAILED for video_id=%s: %s", video_id, e, exc_info=True)
         return jsonify({"error": str(e), "video_id": video_id}), 500
+
+
+# Minimum cosine similarity to consider a frame face as matching a known face (for presence timeline).
+FACE_PRESENCE_MATCH_THRESHOLD = 0.60
+
+
+@videos_bp.route("/<video_id>/face-presence", methods=["GET"])
+def api_video_face_presence(video_id: str):
+    """
+    GET: Return per-face presence across the video timeline.
+    Prefers Marengo clip embeddings when available: matches each detected face (Marengo image
+    embed) to video clip embeddings for full coverage. Fallback: samples frames at segment
+    midpoints and matches faces. Returns segment_presence (0/1 per segment) per face.
+    Result is cached in metadata.face_presence.
+    """
+    video_id = (video_id or "").strip()
+    if not video_id:
+        return jsonify({"error": "video_id is required"}), 400
+    entry = index_get_entry(video_id)
+    if not entry:
+        return jsonify({"error": "Video not found", "video_id": video_id}), 404
+    meta = entry.get("metadata") or {}
+    raw_insights = meta.get("video_insights") or {}
+    detected_faces = list(raw_insights.get("detected_faces") or [])
+    video_duration_sec = raw_insights.get("video_duration_sec") or 0.0
+
+    if not detected_faces:
+        return jsonify({
+            "video_id": video_id,
+            "duration_sec": video_duration_sec,
+            "segments": 0,
+            "presence": [],
+            "message": "No detected faces. Generate insights first.",
+        }), 200
+
+    if video_duration_sec <= 0:
+        try:
+            output_uri = meta.get("output_s3_uri") or f"{S3_EMBEDDINGS_OUTPUT}/{video_id}"
+            all_clips = load_video_embeddings_from_s3(output_uri)
+            clip_list = [c for c in all_clips if c.get("embeddingScope") == "clip"]
+            if clip_list:
+                video_duration_sec = max(c.get("endSec", 0) for c in clip_list)
+        except Exception:
+            pass
+        if video_duration_sec <= 0:
+            video_duration_sec = 300.0
+
+    # Return cached if present and face count matches
+    cached = meta.get("face_presence")
+    if (
+        cached
+        and isinstance(cached.get("presence"), list)
+        and len(cached["presence"]) == len(detected_faces)
+        and cached.get("duration_sec") == video_duration_sec
+    ):
+        log.info("[FACE_PRESENCE] Returning cached for video_id=%s", video_id)
+        return jsonify({
+            "video_id": video_id,
+            "duration_sec": cached["duration_sec"],
+            "segments": cached["segments"],
+            "presence": cached["presence"],
+        })
+
+    # Build reference embeddings for each known face (Marengo image embed — same space as clip embeddings)
+    face_embeddings: list[list[float]] = []
+    for f in detected_faces:
+        b64 = None
+        if f.get("face_path"):
+            b64 = load_face_from_disk(video_id, f["face_path"])
+        if not b64 and f.get("image_base64"):
+            b64 = f["image_base64"]
+        if not b64:
+            log.warning("[FACE_PRESENCE] No image for face_id=%s", f.get("face_id"))
+            face_embeddings.append([])
+            continue
+        emb = embed_face_crop({"image_base64": b64})
+        face_embeddings.append(emb if emb else [])
+
+    output_uri = meta.get("output_s3_uri") or f"{S3_EMBEDDINGS_OUTPUT}/{video_id}"
+    use_marengo = False
+    try:
+        all_clips = load_video_embeddings_from_s3(output_uri)
+        clip_list = [c for c in all_clips if c.get("embeddingScope") == "clip"]
+        if clip_list:
+            video_duration_sec = max(c.get("endSec", 0) for c in clip_list)
+            use_marengo = True
+    except Exception as e:
+        log.debug("[FACE_PRESENCE] Marengo clips not available for video_id=%s: %s", video_id, e)
+
+    n_segments = min(40, max(20, int(video_duration_sec / 3.0)))
+    seg_dur = video_duration_sec / n_segments
+    presence_by_face: list[dict] = [
+        {"face_id": i, "segment_presence": [0] * n_segments}
+        for i in range(len(detected_faces))
+    ]
+
+    if use_marengo:
+        # Marengo-based presence: match each face embedding to clip embeddings (full video coverage)
+        for j, emb in enumerate(face_embeddings):
+            if not emb:
+                continue
+            clips = clips_above_threshold(
+                emb,
+                output_uri,
+                min_score=FACE_PRESENCE_MATCH_THRESHOLD,
+                visual_only=True,
+                max_clips=50,
+            )
+            for clip in clips:
+                c_start = float(clip.get("start", 0.0))
+                c_end = float(clip.get("end", c_start + 0.5))
+                for i in range(n_segments):
+                    s0 = i * seg_dur
+                    s1 = (i + 1) * seg_dur
+                    if c_end > s0 and c_start < s1:
+                        presence_by_face[j]["segment_presence"][i] = 1
+        log.info("[FACE_PRESENCE] Used Marengo clip embeddings for video_id=%s", video_id)
+    else:
+        # Fallback: sample frames at segment midpoints and match faces
+        for i in range(n_segments):
+            t_mid = (i + 0.5) * seg_dur
+            frame_bytes = get_frame_bytes(video_id, t_mid)
+            if not frame_bytes or is_frame_blurred(frame_bytes):
+                continue
+            faces_in_frame = detect_and_crop_faces(frame_bytes, output_size=256, min_confidence=0.50)
+            for face in faces_in_frame:
+                emb = embed_face_crop(face)
+                if not emb:
+                    continue
+                best_j = -1
+                best_sim = -1.0
+                for j, ref_emb in enumerate(face_embeddings):
+                    if not ref_emb:
+                        continue
+                    sim = face_cosine_sim(emb, ref_emb)
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_j = j
+                if best_j >= 0 and best_sim >= FACE_PRESENCE_MATCH_THRESHOLD:
+                    presence_by_face[best_j]["segment_presence"][i] = 1
+
+    result = {
+        "duration_sec": video_duration_sec,
+        "segments": n_segments,
+        "presence": presence_by_face,
+    }
+    # Cache in index
+    idx = vs_index()
+    for rec in idx:
+        if rec.get("id") == video_id:
+            rec.setdefault("metadata", {})["face_presence"] = result
+            break
+    vs_save()
+    invalidate_video_cache()
+
+    log.info(
+        "[FACE_PRESENCE] Computed for video_id=%s: %d faces, %d segments",
+        video_id, len(presence_by_face), n_segments,
+    )
+    return jsonify({"video_id": video_id, **result})

@@ -3,12 +3,15 @@ import { createContext, useContext, useState, useCallback, useRef, useEffect, ty
 import { API_BASE } from '../config'
 
 const CACHE_KEY = 'vc_video_cache'
+const CACHE_TS_KEY = 'vc_video_cache_ts'
 const CACHE_STALE_MS = 60_000
+const URL_TTL_MS = 50 * 60_000
 
 export type CachedVideo = {
   id: string
   stream_url?: string
   thumbnail_url?: string
+  thumbnail_data_url?: string
   duration_seconds?: number
   metadata: Record<string, any>
 }
@@ -27,7 +30,14 @@ const VideoCacheContext = createContext<VideoCacheState | null>(null)
 function loadFromStorage(): CachedVideo[] {
   try {
     const raw = localStorage.getItem(CACHE_KEY)
-    if (raw) return JSON.parse(raw) as CachedVideo[]
+    if (!raw) return []
+    const ts = Number(localStorage.getItem(CACHE_TS_KEY) || '0')
+    const videos = JSON.parse(raw) as CachedVideo[]
+    const urlsExpired = Date.now() - ts > URL_TTL_MS
+    if (urlsExpired) {
+      return videos.map((v) => ({ ...v, stream_url: undefined, thumbnail_url: undefined }))
+    }
+    return videos
   } catch { /* ignore */ }
   return []
 }
@@ -36,10 +46,14 @@ function saveToStorage(videos: CachedVideo[]) {
   try {
     const lite = videos.map((v) => ({
       id: v.id,
+      stream_url: v.stream_url,
+      thumbnail_url: v.thumbnail_url,
+      thumbnail_data_url: v.thumbnail_data_url,
       duration_seconds: v.duration_seconds,
       metadata: v.metadata,
     }))
     localStorage.setItem(CACHE_KEY, JSON.stringify(lite))
+    localStorage.setItem(CACHE_TS_KEY, String(Date.now()))
   } catch { /* ignore */ }
 }
 
@@ -51,12 +65,12 @@ export function VideoCacheProvider({ children }: { children: ReactNode }) {
   const fetchingRef = useRef(false)
   const mountedRef = useRef(true)
 
-  const refresh = useCallback(async (force = false) => {
+  const refresh = useCallback(async (force = false, silent = false) => {
     if (fetchingRef.current) return
     if (!force && lastFetchedAt && Date.now() - lastFetchedAt < CACHE_STALE_MS) return
 
     fetchingRef.current = true
-    setLoading(true)
+    if (!silent) setLoading(true)
     setError(null)
     try {
       const res = await fetch(`${API_BASE}/api/videos`)
@@ -66,6 +80,7 @@ export function VideoCacheProvider({ children }: { children: ReactNode }) {
         id: v.id,
         stream_url: v.stream_url || undefined,
         thumbnail_url: v.thumbnail_url || undefined,
+        thumbnail_data_url: v.thumbnail_data_url || undefined,
         duration_seconds: v.duration_seconds ?? undefined,
         metadata: v.metadata || {},
       }))
@@ -75,7 +90,7 @@ export function VideoCacheProvider({ children }: { children: ReactNode }) {
         setLastFetchedAt(Date.now())
       }
     } catch (e: any) {
-      if (mountedRef.current) setError(e.message || 'Failed to fetch videos')
+      if (mountedRef.current && !silent) setError(e.message || 'Failed to fetch videos')
     } finally {
       fetchingRef.current = false
       if (mountedRef.current) setLoading(false)
@@ -84,7 +99,9 @@ export function VideoCacheProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     mountedRef.current = true
-    refresh(true)
+    const cached = loadFromStorage()
+    const hasValidCache = cached.length > 0 && cached.some((v) => v.thumbnail_url || v.stream_url)
+    refresh(true, hasValidCache)
     return () => {
       mountedRef.current = false
     }
