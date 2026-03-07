@@ -303,14 +303,28 @@ type VideoItem = {
   detectedObjects?: string[]
 }
 
-function relevanceLabel(clips: ClipMatch[] | undefined): { label: string; color: string } {
+function bestClipScore(clips: ClipMatch[] | undefined): number {
+  if (!clips || clips.length === 0) return 0
+  return Math.max(...clips.map((c) => c.score))
+}
+
+type RelevanceLevel = 'Highest' | 'High' | 'Medium' | 'Low'
+
+function relevanceLabel(clips: ClipMatch[] | undefined): { label: RelevanceLevel | ''; color: string } {
   if (!clips || clips.length === 0) return { label: '', color: '' }
-  const best = Math.max(...clips.map((c) => c.score))
+  const best = bestClipScore(clips)
   if (best >= 0.10) return { label: 'Highest', color: 'bg-emerald-100 text-emerald-800 border-emerald-300' }
   if (best >= 0.08) return { label: 'High', color: 'bg-green-100 text-green-800 border-green-300' }
   if (best >= 0.06) return { label: 'Medium', color: 'bg-yellow-100 text-yellow-800 border-yellow-300' }
   return { label: 'Low', color: 'bg-red-50 text-red-700 border-red-200' }
 }
+
+const RELEVANCE_LEVELS: { level: RelevanceLevel; color: string; activeColor: string }[] = [
+  { level: 'Highest', color: 'border-emerald-300 text-emerald-800', activeColor: 'bg-emerald-100 border-emerald-400 text-emerald-900' },
+  { level: 'High', color: 'border-green-300 text-green-800', activeColor: 'bg-green-100 border-green-400 text-green-900' },
+  { level: 'Medium', color: 'border-yellow-300 text-yellow-800', activeColor: 'bg-yellow-100 border-yellow-400 text-yellow-900' },
+  { level: 'Low', color: 'border-red-200 text-red-700', activeColor: 'bg-red-50 border-red-300 text-red-800' },
+]
 
 function clipScoreColor(score: number): string {
   if (score >= 0.10) return 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -554,6 +568,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
   const [viewMode, setViewMode] = useState<'videos' | 'tabular'>('videos')
   const [videosPage, setVideosPage] = useState(1)
   const [tabularPage, setTabularPage] = useState(1)
+  const [activeRelevanceFilter, setActiveRelevanceFilter] = useState<RelevanceLevel | null>(null)
   const VIDEOS_PAGE_SIZE = 7
   const TABULAR_PAGE_SIZE = 8
   const { videos: cachedVideos } = useVideoCache()
@@ -731,7 +746,16 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
   const allVideos = useMemo(() => [...SAMPLE_VIDEOS, ...apiVideos], [apiVideos])
 
   const filteredVideos = useMemo(() => {
-    if (searchResults) return searchResults.results
+    if (searchResults) {
+      let results = [...searchResults.results].sort((a, b) => bestClipScore(b.clips) - bestClipScore(a.clips))
+      if (activeRelevanceFilter) {
+        results = results.filter((v) => {
+          const rel = relevanceLabel(v.clips)
+          return rel.label === activeRelevanceFilter
+        })
+      }
+      return results
+    }
     let list = allVideos
     if (activeCategory !== 'All') {
       list = list.filter((v) => v.category === activeCategory)
@@ -740,7 +764,17 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
       list = [...list].sort((a, b) => a.title.localeCompare(b.title))
     }
     return list
-  }, [allVideos, sortBy, activeCategory, searchResults])
+  }, [allVideos, sortBy, activeCategory, searchResults, activeRelevanceFilter])
+
+  const relevanceCounts = useMemo(() => {
+    if (!searchResults) return null
+    const counts: Record<RelevanceLevel, number> = { Highest: 0, High: 0, Medium: 0, Low: 0 }
+    for (const v of searchResults.results) {
+      const rel = relevanceLabel(v.clips)
+      if (rel.label && rel.label in counts) counts[rel.label as RelevanceLevel]++
+    }
+    return counts
+  }, [searchResults])
 
   /** For tabular view: always merge analysis from cache so categories/topics/people/riskLevel are up to date (from video analysis, not entity-indexed). */
   const videosForTable = useMemo(() => {
@@ -794,12 +828,13 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
     setSearchError(null)
     setSearchLoading(true)
     setDocResults(null)
+    setActiveRelevanceFilter(null)
 
     const headers = { 'Content-Type': 'application/json' }
 
     const videoBody: Record<string, unknown> = {
-      top_k: hasEntities ? 12 : 24,
-      clips_per_video: hasEntities ? 3 : 5,
+      top_k: hasEntities ? 12 : 18,
+      clips_per_video: hasEntities ? 2 : 3,
     }
     if (hasQuery) videoBody.query = query
     if (hasEntities) videoBody.entity_ids = entityIds
@@ -939,6 +974,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
     setSearchResults(null)
     setDocResults(null)
     setSearchError(null)
+    setActiveRelevanceFilter(null)
     try {
       sessionStorage.removeItem('vc_last_search')
     } catch {
@@ -1175,7 +1211,8 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
         </p>
       )}
       {searchResults && (
-        <div className="flex flex-wrap items-center gap-3 mb-3">
+        <div className="mb-3 space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
           <span className="text-sm text-text-secondary">
             {(() => {
               const vCount = searchResults.results.length
@@ -1194,6 +1231,47 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
           >
             Clear search
           </button>
+          </div>
+          {relevanceCounts && searchResults.results.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Relevance filter">
+              <span className="text-xs font-medium text-text-tertiary uppercase tracking-wider mr-1">Relevance</span>
+              {RELEVANCE_LEVELS.map(({ level, color, activeColor }) => {
+                const count = relevanceCounts[level]
+                if (count === 0) return null
+                const isActive = activeRelevanceFilter === level
+                return (
+                  <button
+                    key={level}
+                    type="button"
+                    aria-pressed={isActive}
+                    onClick={() => {
+                      setActiveRelevanceFilter((prev) => prev === level ? null : level)
+                      setVideosPage(1)
+                    }}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                      isActive ? activeColor : `bg-surface ${color} hover:bg-gray-50`
+                    }`}
+                  >
+                    {level}
+                    <span className={`inline-flex items-center justify-center min-w-[1.125rem] h-[1.125rem] rounded-full text-[10px] font-bold ${
+                      isActive ? 'bg-white/60' : 'bg-black/5'
+                    } px-1`}>
+                      {count}
+                    </span>
+                  </button>
+                )
+              })}
+              {activeRelevanceFilter && (
+                <button
+                  type="button"
+                  onClick={() => { setActiveRelevanceFilter(null); setVideosPage(1) }}
+                  className="text-xs text-text-tertiary hover:text-text-primary transition-colors ml-1 underline underline-offset-2"
+                >
+                  Clear filter
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
 

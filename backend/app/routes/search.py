@@ -107,7 +107,7 @@ def api_search_videos():
             clips = []
             if is_entity_search:
                 if r.get("face_clips"):
-                    clips = r["face_clips"][:50]
+                    clips = r["face_clips"][:clips_per_video]
                 else:
                     output_uri = meta.get("output_s3_uri") or (f"{S3_EMBEDDINGS_OUTPUT}/{r['id']}" if r.get("id") else None)
                     if output_uri and meta.get("status") == "ready":
@@ -117,7 +117,7 @@ def api_search_videos():
                                 output_uri,
                                 min_score=ENTITY_CLIP_MIN_SCORE,
                                 visual_only=True,
-                                max_clips=50,
+                                max_clips=clips_per_video,
                             )
                         except Exception:
                             pass
