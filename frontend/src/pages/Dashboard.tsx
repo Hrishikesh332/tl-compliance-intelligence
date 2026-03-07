@@ -554,8 +554,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
   const [viewMode, setViewMode] = useState<'videos' | 'tabular'>('videos')
   const [videosPage, setVideosPage] = useState(1)
   const [tabularPage, setTabularPage] = useState(1)
-  const FIRST_VIDEOS_PAGE_SIZE = 7
-  const OTHER_VIDEOS_PAGE_SIZE = 8
+  const VIDEOS_PAGE_SIZE = 7
   const TABULAR_PAGE_SIZE = 8
   const { videos: cachedVideos } = useVideoCache()
   const apiVideos = useMemo<VideoItem[]>(() => {
@@ -763,18 +762,13 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
 
   const totalVideoPages = useMemo(() => {
     const total = filteredVideos.length
-    if (total <= FIRST_VIDEOS_PAGE_SIZE) return 1
-    const remaining = total - FIRST_VIDEOS_PAGE_SIZE
-    return 1 + Math.max(1, Math.ceil(remaining / OTHER_VIDEOS_PAGE_SIZE))
+    return Math.max(1, Math.ceil(total / VIDEOS_PAGE_SIZE))
   }, [filteredVideos.length])
   const paginatedVideos = useMemo(() => {
     const total = filteredVideos.length
     if (total === 0) return []
-    if (videosPage === 1) {
-      return filteredVideos.slice(0, FIRST_VIDEOS_PAGE_SIZE)
-    }
-    const start = FIRST_VIDEOS_PAGE_SIZE + (videosPage - 2) * OTHER_VIDEOS_PAGE_SIZE
-    return filteredVideos.slice(start, start + OTHER_VIDEOS_PAGE_SIZE)
+    const start = (videosPage - 1) * VIDEOS_PAGE_SIZE
+    return filteredVideos.slice(start, start + VIDEOS_PAGE_SIZE)
   }, [filteredVideos, videosPage])
 
   const totalTabularPages = Math.max(1, Math.ceil(videosForTable.length / TABULAR_PAGE_SIZE))
@@ -1416,13 +1410,8 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                 {(() => {
                   const total = filteredVideos.length
                   if (total === 0) return 'Showing 0 of 0'
-                  if (videosPage === 1) {
-                    const start = 1
-                    const end = Math.min(FIRST_VIDEOS_PAGE_SIZE, total)
-                    return `Showing ${start}–${end} of ${total}`
-                  }
-                  const start = FIRST_VIDEOS_PAGE_SIZE + (videosPage - 2) * OTHER_VIDEOS_PAGE_SIZE + 1
-                  const end = Math.min(FIRST_VIDEOS_PAGE_SIZE + (videosPage - 1) * OTHER_VIDEOS_PAGE_SIZE, total)
+                  const start = (videosPage - 1) * VIDEOS_PAGE_SIZE + 1
+                  const end = Math.min(videosPage * VIDEOS_PAGE_SIZE, total)
                   return `Showing ${start}–${end} of ${total}`
                 })()}
               </p>

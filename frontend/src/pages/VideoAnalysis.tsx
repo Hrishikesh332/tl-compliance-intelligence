@@ -1580,7 +1580,14 @@ export default function VideoAnalysis() {
             >
               <div className="flex flex-col items-center gap-3 w-full max-w-[560px]">
                 <div className="rounded-xl overflow-hidden bg-brand-charcoal shadow-lg w-full shrink-0">
-                  <StableVideoPlayer ref={sidebarPlayerRef} src={videoStreamUrl} />
+                  {videoStreamUrl ? (
+                    <StableVideoPlayer ref={sidebarPlayerRef} src={videoStreamUrl} />
+                  ) : (
+                    <div className="relative aspect-video bg-gray-800 flex flex-col items-center justify-center gap-3 w-full">
+                      <img src={spinnerIconUrl} alt="" className="w-10 h-10 animate-spin opacity-90 invert" aria-hidden />
+                      <p className="text-sm text-white/70">Loading video…</p>
+                    </div>
+                  )}
                 </div>
                 <p className="text-sm text-gray-600 truncate w-full text-center">{videoTitle || `Video ${videoId}`}</p>
               </div>
@@ -2131,7 +2138,14 @@ export default function VideoAnalysis() {
           )}
 
           <div className="rounded-xl overflow-hidden bg-brand-charcoal shadow-lg shrink-0">
-            <StableVideoPlayer ref={playerRef} src={videoStreamUrl} />
+            {videoStreamUrl ? (
+              <StableVideoPlayer ref={playerRef} src={videoStreamUrl} />
+            ) : (
+              <div className="relative aspect-video bg-gray-800 flex flex-col items-center justify-center gap-3">
+                <img src={spinnerIconUrl} alt="" className="w-10 h-10 animate-spin opacity-90 invert" aria-hidden />
+                <p className="text-sm text-white/70">Loading video…</p>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2 shrink-0">

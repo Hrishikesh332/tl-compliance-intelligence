@@ -32,3 +32,15 @@ video_compliance_v1.zip
 
 # Local video assets (not committed)
 new-videos/
+bodycam/
+
+# Video files (anywhere in repo)
+*.mp4
+*.webm
+*.mov
+*.avi
+*.mkv
+*.m4v
+*.wmv
+*.flv
+*.ogv
