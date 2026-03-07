@@ -219,7 +219,7 @@ function Shell() {
             />
             <Route path="/entities" element={<EntitiesPage />} />
             <Route path="/chat" element={<Chatbot />} />
-            <Route path="/video/:videoId" element={<VideoAnalysisWithBoundary />} />
+            <Route path="/video/:videoId/*" element={<VideoAnalysisWithBoundary />} />
             <Route path="/" element={<OverviewPage />} />
           </Routes>
         </main>

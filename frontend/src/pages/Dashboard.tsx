@@ -23,6 +23,7 @@ type SearchAttachment = {
   type: 'image' | 'entity'
   name: string
   previewUrl: string
+  file?: File
 }
 
 type EntityOption = {
@@ -822,22 +823,40 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
   async function handleSearch(overrideQuery?: string) {
     const query = (overrideQuery ?? searchQuery).trim()
     const entityIds = searchAttachments.filter((a) => a.type === 'entity').map((a) => a.id)
+    const imageAttachment = searchAttachments.find((a) => a.type === 'image')
     const hasQuery = query.length > 0
     const hasEntities = entityIds.length > 0
-    if (!hasQuery && !hasEntities) return
+    const hasImage = !!imageAttachment
+    if (!hasQuery && !hasEntities && !hasImage) return
     setSearchError(null)
     setSearchLoading(true)
     setDocResults(null)
     setActiveRelevanceFilter(null)
 
+    let imageBase64: string | null = null
+    if (imageAttachment) {
+      if (imageAttachment.file) {
+        const buf = await imageAttachment.file.arrayBuffer()
+        imageBase64 = btoa(
+          new Uint8Array(buf).reduce((data, byte) => data + String.fromCharCode(byte), ''),
+        )
+      } else if (imageAttachment.previewUrl.startsWith('data:')) {
+        const commaIndex = imageAttachment.previewUrl.indexOf(',')
+        if (commaIndex !== -1) {
+          imageBase64 = imageAttachment.previewUrl.slice(commaIndex + 1)
+        }
+      }
+    }
+
     const headers = { 'Content-Type': 'application/json' }
 
     const videoBody: Record<string, unknown> = {
-      top_k: hasEntities ? 12 : 18,
-      clips_per_video: hasEntities ? 2 : 3,
+      top_k: (hasEntities || hasImage) ? 12 : 18,
+      clips_per_video: (hasEntities || hasImage) ? 2 : 3,
     }
     if (hasQuery) videoBody.query = query
     if (hasEntities) videoBody.entity_ids = entityIds
+    if (imageBase64) videoBody.image_base64 = imageBase64
 
     const videoFetch = fetch(`${API_BASE}/api/search/videos`, {
       method: 'POST', headers, body: JSON.stringify(videoBody),
@@ -927,7 +946,28 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
           const displayQuery = data.query ?? (hasQuery ? query : (hasEntities ? `Entity: ${searchAttachments.filter((a) => a.type === 'entity').map((a) => a.name).join(', ')}` : query))
           setSearchResults({ query: displayQuery, results })
           try {
-            sessionStorage.setItem('vc_last_search', JSON.stringify({ query: displayQuery, results }))
+            const persistedAttachments = searchAttachments.map((att) => {
+              if (att.type === 'image') {
+                let previewUrl = att.previewUrl
+                if (imageBase64) {
+                  const mime = att.file?.type || 'image/jpeg'
+                  previewUrl = `data:${mime};base64,${imageBase64}`
+                }
+                return {
+                  id: att.id,
+                  type: att.type,
+                  name: att.name,
+                  previewUrl,
+                }
+              }
+              return {
+                id: att.id,
+                type: att.type,
+                name: att.name,
+                previewUrl: att.previewUrl,
+              }
+            })
+            sessionStorage.setItem('vc_last_search', JSON.stringify({ query: displayQuery, results, attachments: persistedAttachments }))
           } catch { /* ignore */ }
         }
       } else {
@@ -959,10 +999,16 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
     try {
       const raw = sessionStorage.getItem('vc_last_search')
       if (raw) {
-        const parsed = JSON.parse(raw) as { query: string; results: VideoItem[] }
+        const parsed = JSON.parse(raw) as { query: string; results: VideoItem[]; attachments?: SearchAttachment[] }
         if (parsed?.query != null && Array.isArray(parsed.results)) {
           setSearchQuery(parsed.query)
           setSearchResults({ query: parsed.query, results: parsed.results })
+          if (Array.isArray(parsed.attachments)) {
+            const nonEntity = parsed.attachments.filter((a) => a.type !== 'entity')
+            const entities = parsed.attachments.filter((a) => a.type === 'entity')
+            const lastEntity = entities[entities.length - 1]
+            setSearchAttachments(lastEntity ? [...nonEntity, lastEntity] : nonEntity)
+          }
         }
       }
     } catch {
@@ -975,6 +1021,8 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
     setDocResults(null)
     setSearchError(null)
     setActiveRelevanceFilter(null)
+    setSearchAttachments([])
+    setSearchQuery('')
     try {
       sessionStorage.removeItem('vc_last_search')
     } catch {
@@ -984,8 +1032,14 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
 
   function selectEntity(entity: EntityOption) {
     setSearchAttachments((prev) => {
-      if (prev.some((a) => a.type === 'entity' && a.id === entity.id)) return prev
-      return [...prev, { id: entity.id, type: 'entity' as const, name: entity.name, previewUrl: entity.previewUrl || '' }]
+      const nonEntity = prev.filter((a) => a.type !== 'entity')
+      const nextEntity: SearchAttachment = {
+        id: entity.id,
+        type: 'entity',
+        name: entity.name,
+        previewUrl: entity.previewUrl || '',
+      }
+      return [...nonEntity, nextEntity]
     })
     setSearchQuery((q) => {
       const lastAt = q.lastIndexOf('@')
@@ -1168,10 +1222,10 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
               </div>
               <button
                 type="button"
-                disabled={(!searchQuery.trim() && !searchAttachments.some((a) => a.type === 'entity')) || searchLoading}
+                disabled={(!searchQuery.trim() && !searchAttachments.some((a) => a.type === 'entity') && !searchAttachments.some((a) => a.type === 'image')) || searchLoading}
                 onClick={() => handleSearch()}
                 className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors shrink-0 ${
-                  (searchQuery.trim() || searchAttachments.some((a) => a.type === 'entity')) && !searchLoading
+                  (searchQuery.trim() || searchAttachments.some((a) => a.type === 'entity') || searchAttachments.some((a) => a.type === 'image')) && !searchLoading
                     ? 'bg-brand-charcoal text-brand-white hover:bg-gray-600 cursor-pointer'
                     : 'bg-gray-300 text-gray-500 cursor-not-allowed'
                 }`}
@@ -1670,8 +1724,8 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
         onImageAdded={(file) => {
           const url = URL.createObjectURL(file)
           setSearchAttachments((prev) => [
-            ...prev,
-            { id: `img-${Date.now()}`, type: 'image', name: file.name, previewUrl: url },
+            ...prev.filter((a) => a.type !== 'image'),
+            { id: `img-${Date.now()}`, type: 'image', name: file.name, previewUrl: url, file },
           ])
           setAddImageModalOpen(false)
         }}
@@ -1680,10 +1734,16 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
         open={addEntityModalOpen}
         onClose={() => setAddEntityModalOpen(false)}
         onEntityAdded={(selection) => {
-          setSearchAttachments((prev) => [
-            ...prev,
-            { id: selection.id ?? `ent-${Date.now()}`, type: 'entity', name: selection.name?.trim() || selection.file?.name || 'Entity', previewUrl: selection.previewUrl },
-          ])
+          setSearchAttachments((prev) => {
+            const nonEntity = prev.filter((a) => a.type !== 'entity')
+            const id = selection.id ?? `ent-${Date.now()}`
+            const name = selection.name?.trim() || selection.file?.name || 'Entity'
+            const previewUrl = selection.previewUrl
+            return [
+              ...nonEntity,
+              { id, type: 'entity', name, previewUrl },
+            ]
+          })
           setAddEntityModalOpen(false)
         }}
       />

@@ -1225,7 +1225,6 @@ def extract_unique_faces_from_video(
 
 
 def get_search_embedding_from_request(data: dict, request) -> tuple[list[float] | None, str | None, bool, str]:
-    from app.utils.faces import embed_best_face_from_image
     query = (data.get("query") or data.get("text") or request.form.get("query") or "").strip()
     entity_ids = data.get("entity_ids")
     if entity_ids is None and data.get("entity_id"):
@@ -1257,12 +1256,9 @@ def get_search_embedding_from_request(data: dict, request) -> tuple[list[float] 
             pass
     if image_bytes:
         try:
-            emb = embed_best_face_from_image(image_bytes)
-            if emb is not None:
-                return emb, "Image search (face)", True, None
             media = media_source_base64(image_bytes)
             emb = embed_image(media)
-            return emb, "Image search", True, None
+            return emb, "Image search", False, None
         except Exception as e:
             return None, None, False, str(e)
 

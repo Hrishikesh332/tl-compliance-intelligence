@@ -1201,6 +1201,7 @@ const StableVideoPlayer = forwardRef<VideoPlayerHandle, {
 export default function VideoAnalysis() {
   const { videoId } = useParams<{ videoId: string }>()
   const location = useLocation()
+  const isCheckPath = location.pathname.endsWith('/check')
   const navState = (location.state || {}) as { searchClips?: ClipMatch[]; searchScore?: number; searchQuery?: string }
   const { getVideo, refresh: refreshCache } = useVideoCache()
 
@@ -1836,15 +1837,19 @@ export default function VideoAnalysis() {
           <Section title="Video description" color="bg-accent">
               <>
                 <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
-                  <h4 className="text-base font-semibold text-gray-700 w-fit max-w-full pr-4">{toTitleCase(videoAnalysis.title)}</h4>
-                  <button
-                    type="button"
-                    onClick={generateAnalysis}
-                    disabled={generatingAnalysis}
-                    className="text-xs font-medium text-accent hover:underline disabled:opacity-60 shrink-0"
-                  >
-                    {generatingAnalysis ? 'Regenerating…' : 'Regenerate analysis'}
-                  </button>
+                  <h4 className="text-base font-semibold text-gray-700 w-fit max-w-full pr-4">
+                    {toTitleCase(videoAnalysis.title)}
+                  </h4>
+                  {isCheckPath && (
+                    <button
+                      type="button"
+                      onClick={generateAnalysis}
+                      disabled={generatingAnalysis}
+                      className="text-xs font-medium text-accent hover:underline disabled:opacity-60 shrink-0"
+                    >
+                      {generatingAnalysis ? 'Regenerating…' : 'Regenerate analysis'}
+                    </button>
+                  )}
                 </div>
                 <p className="text-base text-gray-600 leading-relaxed">{videoAnalysis.description}</p>
               </>
