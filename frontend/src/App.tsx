@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
+import { Component, useState, useEffect, useRef } from 'react'
+import type { ReactNode, ErrorInfo } from 'react'
 import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
 import OverviewPage from './pages/OverviewPage'
 import Dashboard from './pages/Dashboard'
@@ -9,6 +10,48 @@ import UploadMediaModal from './components/UploadMediaModal'
 import { VideoCacheProvider } from './contexts/VideoCache'
 /* Strand: logo and icons from design system (strand/assets, strand/icons) */
 import logoMarkUrl from '../strand/assets/logo-mark.svg?url'
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
+  state = { hasError: false, error: null as Error | null }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[ErrorBoundary]', error, info.componentStack)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-background p-6">
+          <div className="max-w-md text-center space-y-4">
+            <h2 className="text-xl font-semibold text-text-primary">Something went wrong</h2>
+            <p className="text-sm text-text-secondary">{this.state.error?.message || 'An unexpected error occurred.'}</p>
+            <div className="flex items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => this.setState({ hasError: false, error: null })}
+                className="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent/90 transition-colors"
+              >
+                Try again
+              </button>
+              <button
+                type="button"
+                onClick={() => { window.location.href = '/dashboard' }}
+                className="px-4 py-2 rounded-lg border border-border bg-surface text-text-primary text-sm font-medium hover:bg-card transition-colors"
+              >
+                Go to Dashboard
+              </button>
+            </div>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard' },
@@ -27,11 +70,6 @@ function NavLinks({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate
   const handleClick = (e: React.MouseEvent, to: string) => {
     e.preventDefault()
     onNavigate?.()
-    // From /video/*, client-side navigate often doesn't update the view (RR v7). Use full navigation.
-    if (location.pathname.startsWith('/video/')) {
-      window.location.href = to
-      return
-    }
     navigate(to)
   }
 
@@ -89,7 +127,7 @@ function Shell() {
             <div className="flex items-center gap-2 mr-2 md:mr-6 min-w-0">
               <button
                 type="button"
-                onClick={() => (location.pathname.startsWith('/video/') ? (window.location.href = '/') : navigate('/'))}
+                onClick={() => navigate('/')}
                 className="font-brand text-text-primary hover:opacity-80 transition-opacity cursor-pointer shrink-0 text-left bg-transparent border-0 p-0 no-underline block"
                 aria-label="Go to Overview"
               >
@@ -148,8 +186,7 @@ function Shell() {
 
       <div className="flex flex-1 overflow-hidden">
         <main className="flex-1 overflow-auto min-w-0">
-          {/* Key by pathname so Routes remount when location updates (workaround for RR v7 transition delay) */}
-          <Routes key={location.pathname} location={location}>
+          <Routes>
             <Route
               path="/dashboard"
               element={
@@ -174,7 +211,9 @@ function App() {
   return (
     <BrowserRouter>
       <VideoCacheProvider>
-        <Shell />
+        <ErrorBoundary>
+          <Shell />
+        </ErrorBoundary>
       </VideoCacheProvider>
     </BrowserRouter>
   )
