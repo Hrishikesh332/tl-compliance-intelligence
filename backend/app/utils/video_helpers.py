@@ -369,6 +369,19 @@ def video_id_to_s3_uri(video_id: str) -> str | None:
     return None
 
 
+# System instruction for Q&A (ask-video): model must include timestamps in a parseable tag format for any moment referenced.
+# Frontend recognizes: [M:SS], [MM:SS], (M:SS), (MM:SS), "M:SS", "MM:SS", "at M:SS", "Ns", "N seconds (M:SS)", "M:SS to M:SS", etc.
+ASK_VIDEO_SYSTEM_PROMPT = """You are answering questions about a video. For every answer:
+- Always include timestamps for any moment in the video you reference (events, dialogue, objects, incidents, or quotes). Provide timestamps in every response—even when the user does not explicitly ask for them.
+- Use the tagged timestamp format so timestamps are clickable. Both M:SS and MM:SS (zero-padded) are accepted:
+  - [M:SS] or [MM:SS] for times under an hour (e.g. [0:00], [2:14], [02:14], [12:05]).
+  - [H:MM:SS] for longer videos (e.g. [1:03:22]).
+- When mentioning a specific time, include the tag in your sentence (e.g. "The officer speaks at [2:14]." or "At [02:14]...").
+- For ranges use either "[M:SS] to [M:SS]" or "[M:SS]–[M:SS]".
+- If you give a time in seconds, also add the tag (e.g. "at 134 seconds [2:14]").
+Answer the user's question clearly and cite timestamps for every relevant moment."""
+
+
 VIDEO_ANALYSIS_PROMPT = """Analyze this video and respond with exactly one JSON object, no other text or markdown. Use this structure only:
 
 {
@@ -392,7 +405,7 @@ Rules:
 - categories: 2–4 high-level labels (e.g. Workplace Safety, Facility Inspection, Compliance Audit).
 - topics: 3–6 specific subjects covered (e.g. Fire safety equipment, Emergency exits, Workspace layout).
 - people: optional array of distinct people identified in the video (names mentioned in speech, officer names, interviewees, etc.). Use empty array [] if none identified.
-- riskLevel: overall risk for the video. risks: list every compliance or safety issue you notice. Each risk must have: label (short description), severity (high/medium/low), and timestamp (when in the video it occurs, in M:SS format, e.g. "0:00", "2:14", "1:05").
+- riskLevel: overall risk for the video. risks: list every compliance or safety issue you notice. Each risk must have: label (short description), severity (high/medium/low), and timestamp (when in the video it occurs). Use M:SS or MM:SS (zero-padded) for timestamp (e.g. "0:00", "2:14", "02:14", "12:05"). These timestamps will be displayed with a [M:SS] or [MM:SS] tag for navigation.
 - transcript: produce a COMPLETE transcript for the ENTIRE video. CRITICAL: (1) The first segment MUST start at "0:00" (the very beginning). (2) The last segment MUST correspond to the end of the video—include speech right up to the final second. (3) Do not leave any time gaps: every part of the video from 0:00 to the end must be represented by transcript segments in chronological order. (4) Use verbatim or near-verbatim speech (word-for-word when possible). (5) Create a new segment every time the speaker changes or every 1–2 sentences; use timestamps in M:SS for the start of each segment. (6) For short videos use at least 15–20 segments; for longer videos use many more so the transcript is thorough. (7) Do not summarize, skip, or omit any part of the spoken content—transcribe what is said from beginning to end.
 - Use only double quotes and valid JSON. No trailing commas."""
 

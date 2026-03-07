@@ -306,67 +306,141 @@ function pad2(n: number): string {
 }
 
 /**
- * Parse Pegasus-style timestamps in text and return segments.
- * Matches: "212s (03:32)", "0s (00:00)~212s (03:32)", "438 seconds (07:18)", "11:33 to 11:43".
+ * Parse timestamps in text and return segments for clickable seek.
+ * Recognizes M:SS and MM:SS (zero-padded) in all forms, e.g. 2:14 and 02:14.
+ * Patterns: [M:SS], [MM:SS], [H:MM:SS], (M:SS), (MM:SS), "212s (03:32)", "0s (00:00)~212s (03:32)",
+ * "438 seconds (07:18)", "11:33 to 11:43", "at 2:14" / "at 02:14", plain "2:14" / "02:14" / "12:05", "90s".
  */
 function parseTimestampSegments(text: string): Array<{ type: 'text'; value: string } | { type: 'ts'; seconds: number; label: string }> {
   const segments: Array<{ type: 'text'; value: string } | { type: 'ts'; seconds: number; label: string }> = []
-  // Pattern A: range "0s (00:00)~212s (03:32)" | single "212s (03:32)"
-  // Pattern B: "438 seconds (07:18)"
-  // Pattern C: "11:33 to 11:43" or "20:13 to 20:21" (MM:SS to MM:SS) — groups 10,11,12,13
-  const fullRe = /(\d+)s\s*\((\d{1,2}):(\d{2})\)(?:\s*~\s*(\d+)s\s*\((\d{1,2}):(\d{2})\))?|(\d+)\s+seconds?\s*\((\d{1,2}):(\d{2})\)|(\d{1,2}):(\d{2})\s+to\s+(\d{1,2}):(\d{2})/gi
-  let m: RegExpExecArray | null
-  let lastEnd = 0
-  while ((m = fullRe.exec(text)) !== null) {
-    if (m.index > lastEnd) {
-      segments.push({ type: 'text', value: text.slice(lastEnd, m.index) })
-    }
-    // "MM:SS to MM:SS" pattern (groups 10–13)
-    if (m[10] !== undefined && m[10].length > 0) {
-      const startM = parseInt(m[10], 10)
-      const startS = parseInt(m[11], 10)
-      const endM = parseInt(m[12], 10)
-      const endS = parseInt(m[13], 10)
-      const seconds = startM * 60 + startS
-      segments.push({
-        type: 'ts',
-        seconds,
-        label: `${pad2(startM)}:${pad2(startS)}–${pad2(endM)}:${pad2(endS)}`,
-      })
-    } else if (m[7] !== undefined && m[7].length > 0) {
-      // "XXX seconds (MM:SS)" pattern (groups 7, 8, 9)
-      const sec = parseInt(m[7], 10)
-      const min = parseInt(m[8], 10)
-      const secPart = parseInt(m[9], 10)
-      segments.push({
-        type: 'ts',
-        seconds: sec,
-        label: `${pad2(min)}:${pad2(secPart)}`,
-      })
-    } else if (m[4] !== undefined && m[4].length > 0) {
-      // Range: 0s (00:00)~212s (03:32)
-      const startM = parseInt(m[2], 10)
-      const startS = parseInt(m[3], 10)
-      const endM = parseInt(m[5], 10)
-      const endS = parseInt(m[6], 10)
-      segments.push({
-        type: 'ts',
-        seconds: parseInt(m[1], 10),
-        label: `${pad2(startM)}:${pad2(startS)}–${pad2(endM)}:${pad2(endS)}`,
-      })
-    } else {
-      // Single: 212s (03:32)
-      segments.push({
-        type: 'ts',
+
+  type MatchResult = { index: number; length: number; seconds: number; label: string }
+  const patterns: Array<{ re: RegExp; getMatch: (m: RegExpExecArray) => MatchResult | null }> = [
+    // 0: "212s (03:32)" or range "0s (00:00)~212s (03:32)"
+    {
+      re: /(\d+)s\s*\((\d{1,2}):(\d{2})\)(?:\s*~\s*(\d+)s\s*\((\d{1,2}):(\d{2})\))?/gi,
+      getMatch: (m) => {
+        const sec = parseInt(m[1], 10)
+        const mm = parseInt(m[2], 10)
+        const ss = parseInt(m[3], 10)
+        let label = `${pad2(mm)}:${pad2(ss)}`
+        if (m[4] !== undefined && m[4].length > 0) {
+          const em = parseInt(m[5], 10)
+          const es = parseInt(m[6], 10)
+          label = `${label}–${pad2(em)}:${pad2(es)}`
+        }
+        return { index: m.index, length: m[0].length, seconds: sec, label }
+      },
+    },
+    // 1: "438 seconds (07:18)"
+    {
+      re: /(\d+)\s+seconds?\s*\((\d{1,2}):(\d{2})\)/gi,
+      getMatch: (m) => ({
+        index: m.index,
+        length: m[0].length,
         seconds: parseInt(m[1], 10),
         label: `${pad2(parseInt(m[2], 10))}:${pad2(parseInt(m[3], 10))}`,
-      })
+      }),
+    },
+    // 2: "11:33 to 11:43"
+    {
+      re: /(\d{1,2}):(\d{2})\s+to\s+(\d{1,2}):(\d{2})/gi,
+      getMatch: (m) => {
+        const m1 = parseInt(m[1], 10)
+        const s1 = parseInt(m[2], 10)
+        const m2 = parseInt(m[3], 10)
+        const s2 = parseInt(m[4], 10)
+        return {
+          index: m.index,
+          length: m[0].length,
+          seconds: m1 * 60 + s1,
+          label: `${pad2(m1)}:${pad2(s1)}–${pad2(m2)}:${pad2(s2)}`,
+        }
+      },
+    },
+    // 3: Tagged [M:SS], [MM:SS], or [H:MM:SS]
+    {
+      re: /\[(\d{1,2}):(\d{2})(?::(\d{2}))?\]/g,
+      getMatch: (m) => {
+        const a = parseInt(m[1], 10)
+        const b = parseInt(m[2], 10)
+        const c = m[3] !== undefined ? parseInt(m[3], 10) : null
+        const seconds = c !== null ? a * 3600 + b * 60 + c : a * 60 + b
+        const label = c !== null ? `${a}:${pad2(b)}:${pad2(c)}` : `${pad2(a)}:${pad2(b)}`
+        return { index: m.index, length: m[0].length, seconds, label }
+      },
+    },
+    // 4: Standalone (M:SS) — not part of "212s (03:32)" (no "Ns " before "(")
+    {
+      re: /(?<!\ds )\s*\((\d{1,2}):(\d{2})\)/g,
+      getMatch: (m) => {
+        const mm = parseInt(m[1], 10)
+        const ss = parseInt(m[2], 10)
+        return { index: m.index, length: m[0].length, seconds: mm * 60 + ss, label: `${pad2(mm)}:${pad2(ss)}` }
+      },
+    },
+    // 5: "at 2:14" or "@ 2:14"
+    {
+      re: /(?:at|@)\s*(\d{1,2}):(\d{2})\b/gi,
+      getMatch: (m) => ({
+        index: m.index,
+        length: m[0].length,
+        seconds: parseInt(m[1], 10) * 60 + parseInt(m[2], 10),
+        label: `${pad2(parseInt(m[1], 10))}:${pad2(parseInt(m[2], 10))}`,
+      }),
+    },
+    // 6: Plain M:SS or MM:SS (e.g. 2:14, 02:14, 12:05; word boundary to avoid "12:301")
+    {
+      re: /\b(\d{1,2}):(\d{2})\b/g,
+      getMatch: (m) => ({
+        index: m.index,
+        length: m[0].length,
+        seconds: parseInt(m[1], 10) * 60 + parseInt(m[2], 10),
+        label: `${pad2(parseInt(m[1], 10))}:${pad2(parseInt(m[2], 10))}`,
+      }),
+    },
+    // 7: "90s" or "90 s" (seconds only)
+    {
+      re: /\b(\d+)\s*s\b/gi,
+      getMatch: (m) => {
+        const sec = parseInt(m[1], 10)
+        const mm = Math.floor(sec / 60)
+        const ss = sec % 60
+        return {
+          index: m.index,
+          length: m[0].length,
+          seconds: sec,
+          label: mm > 0 ? `${pad2(mm)}:${pad2(ss)}` : `0:${pad2(ss)}`,
+        }
+      },
+    },
+  ]
+
+  let lastEnd = 0
+  while (lastEnd < text.length) {
+    let best: MatchResult | null = null
+    for (let i = 0; i < patterns.length; i++) {
+      const { re, getMatch } = patterns[i]
+      re.lastIndex = lastEnd
+      const m = re.exec(text)
+      if (m && m.index >= lastEnd) {
+        const result = getMatch(m)
+        if (result && (best === null || result.index < best.index || (result.index === best.index && result.length > best.length))) {
+          best = result
+        }
+      }
     }
-    lastEnd = m.index + m[0].length
+    if (best === null) {
+      segments.push({ type: 'text', value: text.slice(lastEnd) })
+      break
+    }
+    if (best.index > lastEnd) {
+      segments.push({ type: 'text', value: text.slice(lastEnd, best.index) })
+    }
+    segments.push({ type: 'ts', seconds: best.seconds, label: best.label })
+    lastEnd = best.index + best.length
   }
-  if (lastEnd < text.length) {
-    segments.push({ type: 'text', value: text.slice(lastEnd) })
-  }
+
   return segments.length ? segments : [{ type: 'text', value: text }]
 }
 
