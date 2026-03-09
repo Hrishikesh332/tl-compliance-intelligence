@@ -81,6 +81,11 @@ function NavLinks({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate
   const handleClick = (e: React.MouseEvent, to: string) => {
     e.preventDefault()
     onNavigate?.()
+    const isOnVideoPage = location.pathname.startsWith('/video/')
+    if (isOnVideoPage) {
+      window.location.href = to
+      return
+    }
     navigate(to)
   }
 
