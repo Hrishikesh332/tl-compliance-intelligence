@@ -456,10 +456,15 @@ export default function Chatbot({ fixedVideoId, onClose, onSeekToTime }: Chatbot
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isTyping, setIsTyping] = useState(false)
+  const [isVideoCollapsed, setIsVideoCollapsed] = useState(false)
+  const [videoAspect, setVideoAspect] = useState<number | null>(null)
+  const [selectedTimelineMessageId, setSelectedTimelineMessageId] = useState<string | null>(null)
   const [selectedVideoId, setSelectedVideoId] = useState(fixedVideoId ?? '')
   const [assetOptions, setAssetOptions] = useState<AssetOption[]>([SELECT_ASSETS_OPTION])
+  const [videoDuration, setVideoDuration] = useState<number | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
 
   useEffect(() => {
     if (fixedVideoId) {
@@ -518,8 +523,9 @@ export default function Chatbot({ fixedVideoId, onClose, onSeekToTime }: Chatbot
     const msg = (text ?? input).trim()
     if (!msg || isTyping) return
 
+    const now = Date.now()
     const userMsg: Message = {
-      id: `u-${Date.now()}`,
+      id: `u-${now}`,
       role: 'user',
       content: msg,
       timestamp: new Date(),
@@ -542,20 +548,23 @@ export default function Chatbot({ fixedVideoId, onClose, onSeekToTime }: Chatbot
         })
         const data = await res.json().catch(() => ({}))
         const content = res.ok ? (data.answer ?? 'No response.') : (data.error ?? `Error: ${res.status}`)
+        const assistantId = `a-${Date.now()}`
         setMessages((prev) => [
           ...prev,
           {
-            id: `a-${Date.now()}`,
+            id: assistantId,
             role: 'assistant',
             content,
             timestamp: new Date(),
           },
         ])
+        setSelectedTimelineMessageId(assistantId)
       } catch (err) {
+        const assistantId = `a-${Date.now()}`
         setMessages((prev) => [
           ...prev,
           {
-            id: `a-${Date.now()}`,
+            id: assistantId,
             role: 'assistant',
             content: `Failed to ask about this video: ${err instanceof Error ? err.message : 'Network error'}.`,
             timestamp: new Date(),
@@ -569,13 +578,15 @@ export default function Chatbot({ fixedVideoId, onClose, onSeekToTime }: Chatbot
 
     const delay = 600 + Math.random() * 1200
     setTimeout(() => {
+      const assistantId = `a-${Date.now()}`
       const assistantMsg: Message = {
-        id: `a-${Date.now()}`,
+        id: assistantId,
         role: 'assistant',
         content: getResponse(msg),
         timestamp: new Date(),
       }
       setMessages((prev) => [...prev, assistantMsg])
+      setSelectedTimelineMessageId(assistantId)
       setIsTyping(false)
     }, delay)
   }
@@ -605,8 +616,166 @@ export default function Chatbot({ fixedVideoId, onClose, onSeekToTime }: Chatbot
   const selectedAsset = assetOptions.find((a) => a.id === selectedVideoId)
   const showAssetDropdown = !fixedVideoId
 
+  type HighlightRange = { start: number; end: number }
+
+  const assistantMessages = messages.filter((m) => m.role === 'assistant')
+  const defaultTimelineSourceId = assistantMessages.length ? assistantMessages[assistantMessages.length - 1].id : null
+  const timelineSourceId = selectedTimelineMessageId ?? defaultTimelineSourceId
+
+  const messagesForTimeline = timelineSourceId
+    ? messages.filter((m) => m.id === timelineSourceId)
+    : []
+
+  function extractHighlightRangesFromMessages(msgs: Message[]): HighlightRange[] {
+    const ranges: HighlightRange[] = []
+    for (const msg of msgs) {
+      if (msg.role !== 'assistant') continue
+      const lines = msg.content.split('\n')
+      for (const line of lines) {
+        const segments = parseTimestampSegments(line)
+        for (const seg of segments) {
+          if (seg.type !== 'ts') continue
+          const start = seg.seconds
+          if (!Number.isFinite(start) || start < 0) continue
+          let end = start + 8
+          const dashIndex = seg.label.indexOf('–')
+          if (dashIndex > 0) {
+            const endLabel = seg.label.slice(dashIndex + 1)
+            const parts = endLabel.split(':').map((p) => parseInt(p, 10))
+            if (parts.length === 2 && parts.every((n) => Number.isFinite(n))) {
+              end = parts[0] * 60 + parts[1]
+            } else if (parts.length === 3 && parts.every((n) => Number.isFinite(n))) {
+              end = parts[0] * 3600 + parts[1] * 60 + parts[2]
+            }
+          }
+          if (!Number.isFinite(end) || end <= start) end = start + 2
+          ranges.push({ start, end })
+        }
+      }
+    }
+    if (ranges.length === 0) return []
+    ranges.sort((a, b) => a.start - b.start)
+    const merged: HighlightRange[] = []
+    for (const r of ranges) {
+      if (!merged.length) {
+        merged.push({ ...r })
+      } else {
+        const last = merged[merged.length - 1]
+        if (r.start <= last.end) {
+          last.end = Math.max(last.end, r.end)
+        } else {
+          merged.push({ ...r })
+        }
+      }
+    }
+    return merged
+  }
+
+  const highlightRanges = extractHighlightRangesFromMessages(messagesForTimeline)
+
+  const handleTimestampSeek = (seconds: number) => {
+    if (onSeekToTime) {
+      onSeekToTime(seconds)
+      return
+    }
+    const el = videoRef.current
+    if (!el || !Number.isFinite(seconds)) return
+    try {
+      el.currentTime = seconds
+      void el.play().catch(() => {
+        /* ignore autoplay errors */
+      })
+    } catch {
+      /* ignore seek errors */
+    }
+  }
+
   return (
-    <div className="flex flex-col h-full">
+  <div className="flex flex-col h-full">
+      {!isEmpty && selectedAsset?.streamUrl && (
+        <div className="shrink-0 border-b border-gray-200 bg-background">
+          <div className="max-w-xl mx-auto px-4 py-2">
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] text-gray-400 uppercase tracking-wider leading-none mb-0.5">
+                  Current video
+                </p>
+                <p className="text-xs font-medium text-gray-700 truncate">
+                  {displayName(selectedAsset.title, selectedAsset.id)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsVideoCollapsed((prev) => !prev)}
+                className="shrink-0 text-[11px] px-2.5 py-1 rounded-full border border-gray-300 text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+                aria-label={isVideoCollapsed ? 'Expand video preview' : 'Collapse video preview'}
+              >
+                {isVideoCollapsed ? 'Show video' : 'Hide video'}
+              </button>
+            </div>
+            {!isVideoCollapsed && (
+              <>
+                <div
+                  className="w-full rounded-xl overflow-hidden bg-black"
+                  style={{
+                    aspectRatio: videoAspect ?? 16 / 9,
+                    maxHeight: 200,
+                  }}
+                >
+                  <video
+                    ref={videoRef}
+                    src={selectedAsset.streamUrl}
+                    controls
+                    className="w-full h-full object-contain bg-black"
+                    onLoadedMetadata={(e) => {
+                      const v = e.currentTarget
+                      const dur = v.duration
+                      setVideoDuration(Number.isFinite(dur) && dur > 0 ? dur : null)
+                      if (v.videoWidth && v.videoHeight) {
+                        setVideoAspect(v.videoWidth / v.videoHeight)
+                      } else {
+                        setVideoAspect(null)
+                      }
+                    }}
+                  />
+                </div>
+                {videoDuration && videoDuration > 0 && highlightRanges.length > 0 && (
+                  <div
+                    className="mt-2 h-1.5 rounded-full bg-gray-700/60 relative overflow-hidden cursor-pointer"
+                    onClick={(e) => {
+                      if (!videoDuration) return
+                      const rect = e.currentTarget.getBoundingClientRect()
+                      const ratio = (e.clientX - rect.left) / rect.width
+                      const seconds = Math.max(0, Math.min(videoDuration * ratio, videoDuration))
+                      handleTimestampSeek(seconds)
+                    }}
+                    role="button"
+                    aria-label="Video timeline"
+                  >
+                    {highlightRanges.map((r, idx) => {
+                      const start = Math.max(0, Math.min(r.start, videoDuration))
+                      const end = Math.max(start, Math.min(r.end, videoDuration))
+                      const left = (start / videoDuration) * 100
+                      const width = Math.max(1, ((end - start) / videoDuration) * 100)
+                      return (
+                        <div
+                          key={idx}
+                          className="absolute inset-y-0 bg-accent"
+                          style={{ left: `${left}%`, width: `${width}%` }}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleTimestampSeek(start)
+                          }}
+                        />
+                      )
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
       {onClose && (
         <div className="shrink-0 flex items-center justify-between gap-2 px-4 py-3 border-b border-gray-200 bg-white">
           <span className="text-sm font-medium text-gray-700">Ask about this video</span>
@@ -652,14 +821,26 @@ export default function Chatbot({ fixedVideoId, onClose, onSeekToTime }: Chatbot
           </div>
         ) : (
           <div className="max-w-3xl mx-auto px-6 py-6 space-y-6">
-            {messages.map((msg) => (
-              <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : ''}`}>
+            {messages.map((msg) => {
+              const isTimelineSource = msg.id === timelineSourceId
+              return (
+              <div
+                key={msg.id}
+                className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : ''}`}
+                onClick={() => {
+                  if (msg.role === 'assistant') {
+                    setSelectedTimelineMessageId(msg.id)
+                  }
+                }}
+              >
                 {msg.role === 'assistant' && (
                   <div className="shrink-0 mt-0.5">
                     <TwelveLabsLogoMark className="h-6 w-auto text-brand-charcoal" />
                   </div>
                 )}
-                <div className={`max-w-[85%] ${msg.role === 'user' ? 'order-first' : ''}`}>
+                <div
+                  className={`max-w-[85%] ${msg.role === 'user' ? 'order-first' : ''}`}
+                >
                   <div
                     className={`rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
                       msg.role === 'user'
@@ -667,9 +848,12 @@ export default function Chatbot({ fixedVideoId, onClose, onSeekToTime }: Chatbot
                         : 'bg-white border border-gray-200 text-gray-700 rounded-bl-md shadow-sm'
                     }`}
                   >
-                    {renderContent(msg.content, msg.role === 'assistant' ? onSeekToTime : undefined)}
+                    {renderContent(msg.content, msg.role === 'assistant' ? handleTimestampSeek : undefined)}
                   </div>
-                  <p className={`text-[11px] text-gray-400 mt-1 ${msg.role === 'user' ? 'text-right' : ''}`}>
+                  <p className={`text-[11px] text-gray-400 mt-1 flex items-center gap-1 ${msg.role === 'user' ? 'justify-end' : ''}`}>
+                    {isTimelineSource && msg.role === 'assistant' && (
+                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent" title="Timeline source" />
+                    )}
                     {formatTime(msg.timestamp)}
                   </p>
                 </div>
@@ -679,7 +863,7 @@ export default function Chatbot({ fixedVideoId, onClose, onSeekToTime }: Chatbot
                   </div>
                 )}
               </div>
-            ))}
+            )})}
             {isTyping && (
               <div className="flex gap-3">
                 <div className="shrink-0 mt-0.5">
