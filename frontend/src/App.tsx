@@ -1,6 +1,6 @@
 import { Component, useState, useEffect, useRef } from 'react'
 import type { ReactNode, ErrorInfo } from 'react'
-import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, useLocation, useNavigate, useParams } from 'react-router-dom'
 import OverviewPage from './pages/OverviewPage'
 import Dashboard from './pages/Dashboard'
 import VideoAnalysis from './pages/VideoAnalysis'
@@ -104,8 +104,11 @@ function NavLinks({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate
 }
 
 function VideoAnalysisWithBoundary() {
+  const location = useLocation()
+  const { videoId } = useParams<{ videoId: string }>()
+  const resetKey = `${location.pathname}-${videoId ?? ''}`
   return (
-    <ErrorBoundary>
+    <ErrorBoundary resetKey={resetKey}>
       <VideoAnalysis />
     </ErrorBoundary>
   )
