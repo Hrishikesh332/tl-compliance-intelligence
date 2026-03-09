@@ -256,25 +256,42 @@ def _embed_client():
     )
 
 
+def _embed_via_requests(texts: list[str], input_type: str) -> list[list[float]]:
+    """Call NVIDIA embeddings API directly with requests to guarantee input_type is sent."""
+    import requests as _req
+
+    resp = _req.post(
+        "https://integrate.api.nvidia.com/v1/embeddings",
+        headers={
+            "Authorization": f"Bearer {NVIDIA_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "input": texts,
+            "model": EMBED_MODEL,
+            "encoding_format": "float",
+            "input_type": input_type,
+        },
+        timeout=60,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return [d["embedding"] for d in data["data"]]
+
+
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    """Embed a batch of texts using NVIDIA nv-embedqa-e5-v5."""
+    """Embed a batch of passage texts using NVIDIA nv-embedqa-e5-v5."""
     if not NVIDIA_API_KEY:
         raise RuntimeError("NVIDIA_API_KEY is not set — cannot embed documents")
-
-    client = _embed_client()
     truncated = [t[:2048] for t in texts]
-
-    resp = client.embeddings.create(
-        input=truncated,
-        model=EMBED_MODEL,
-        encoding_format="float",
-    )
-    return [d.embedding for d in resp.data]
+    return _embed_via_requests(truncated, "passage")
 
 
 def embed_query(query: str) -> list[float]:
     """Embed a single search query."""
-    return embed_texts([query])[0]
+    if not NVIDIA_API_KEY:
+        raise RuntimeError("NVIDIA_API_KEY is not set — cannot embed documents")
+    return _embed_via_requests([query[:2048]], "query")[0]
 
 
 # ---------------------------------------------------------------------------

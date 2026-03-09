@@ -1167,15 +1167,10 @@ const StableVideoPlayer = forwardRef<VideoPlayerHandle, {
 
       {(status === 'idle' || status === 'loading') && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          {status === 'loading' ? (
+          <div className="flex flex-col items-center justify-center gap-3">
             <div className="w-10 h-10 border-3 border-white/30 border-t-white rounded-full animate-spin" />
-          ) : (
-            <div className="w-14 h-14 rounded-full bg-surface/20 backdrop-blur-sm flex items-center justify-center">
-              <svg className="w-7 h-7 text-brand-white ml-1" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-            </div>
-          )}
+            <p className="text-sm text-white/80">Loading video…</p>
+          </div>
         </div>
       )}
 
@@ -1208,6 +1203,7 @@ export default function VideoAnalysis() {
   // Track mount state so async work (fetches, timeouts, video events) can safely bail out after unmount.
   const mountedRef = useRef(true)
   useEffect(() => {
+    mountedRef.current = true
     return () => {
       mountedRef.current = false
     }
@@ -1745,30 +1741,22 @@ export default function VideoAnalysis() {
 
               {/* What analysis includes: two blocks (no step framing), People vs Objects explained */}
               <div className="space-y-4 mb-6">
-                {/* Block 1: Content overview */}
-                <div className={`rounded-xl border-2 px-4 py-4 transition-all duration-200 ${
-                  analysisStep === 1 ? 'border-accent bg-[var(--strand-ui-accent-light)] shadow-md' : 'border-border bg-card'
-                }`}>
-                  <div className="flex items-start gap-4">
-                    <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
-                      analysisStep === 1 ? 'bg-brand-charcoal' : 'bg-[var(--strand-product-generate-light)] border border-border'
-                    }`}>
-                      {analysisStep === 1 ? (
-                        <img src={spinnerIconUrl} alt="" className="w-5 h-5 animate-spin opacity-90" aria-hidden />
-                      ) : analysisStep >= 2 ? (
-                        <img src={checkmarkIconUrl} alt="" className="w-5 h-5" aria-hidden />
-                      ) : (
+                {/* Block 1: Content overview (hidden while analysis is running) */}
+                {analysisStep === 0 && (
+                  <div className="rounded-xl border-2 px-4 py-4 transition-all duration-200 border-border bg-card">
+                    <div className="flex items-start gap-4">
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--strand-product-generate-light)] border border-border">
                         <img src={documentListIconUrl} alt="" className="w-5 h-5" aria-hidden />
-                      )}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="font-brand text-base font-medium text-text-primary">Content overview</p>
-                      <p className="text-sm text-text-secondary mt-1">
-                        A written description of the video, categories and topics, risk level and issues, plus a full transcript with timestamps.
-                      </p>
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-brand text-base font-medium text-text-primary">Content overview</p>
+                        <p className="text-sm text-text-secondary mt-1">
+                          A written description of the video, categories and topics, risk level and issues, plus a full transcript with timestamps.
+                        </p>
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
 
                 {/* Block 2: People & objects — split so user understands both */}
                 <div className={`rounded-xl border-2 px-4 py-4 transition-all duration-200 ${

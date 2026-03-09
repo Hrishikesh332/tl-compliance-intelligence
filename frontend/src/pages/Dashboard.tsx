@@ -266,10 +266,12 @@ function TagPills({ tags }: { tags: string[] }) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Dummy data                                                         */
+/*  Category filters                                                   */
 /* ------------------------------------------------------------------ */
 
-const CATEGORIES = ['All', 'Uploaded', 'BodyCam', 'DashCam', 'CCTV', 'Insurance Claim'] as const
+// Category pills are driven by video tags. "All" shows everything.
+// The remaining entries should correspond to tags stored in video metadata.
+const CATEGORIES = ['All', 'BodyCam', 'DashCam', 'CCTV', 'Insurance Claim'] as const
 
 type TableEntity = { id: string; name: string; imageUrl?: string; initials: string }
 
@@ -338,6 +340,24 @@ const SAMPLE_VIDEOS: VideoItem[] = []
 
 const TOTAL_CAPACITY = 100
 const TOTAL_HOURS = 10
+
+const PINNED_VIDEO_IDS = new Set<string>([
+  'd8f1319a-c912-48a1-989b-ddbcf37c3cef',
+])
+
+function reorderWithPinned(videos: VideoItem[]): VideoItem[] {
+  if (!videos.length) return videos
+  const pinned: VideoItem[] = []
+  const rest: VideoItem[] = []
+  for (const v of videos) {
+    if (PINNED_VIDEO_IDS.has(v.id) && !pinned.some((p) => p.id === v.id)) {
+      pinned.push(v)
+    } else {
+      rest.push(v)
+    }
+  }
+  return [...pinned, ...rest]
+}
 
 function formatTotalDuration(videos: VideoItem[], videoDurations?: Record<string, number>) {
   const totalSeconds = videos.reduce((sum, v) => {
@@ -513,39 +533,132 @@ function AdvancedParamsDropdown({
 /*  Document result card                                               */
 /* ------------------------------------------------------------------ */
 
-function DocResultCard({ ext, filename, chunkIndex, text, scorePercent, scoreColor }: {
+const VIDEO_ID_RE = /\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i
+
+function DocResultCard({ ext, filename, chunkIndex, text, scorePercent, docId }: {
   ext: string; filename: string; chunkIndex: number; text: string;
-  scorePercent: number; scoreColor: string;
+  scorePercent: number; docId: string;
 }) {
   const [expanded, setExpanded] = useState(false)
-  const snippet = text.length > 300 ? text.slice(0, 300) : text
-  const hasMore = text.length > 300
+  const snippet = text.length > 280 ? text.slice(0, 280) : text
+  const hasMore = text.length > 280
+
+  const videoId = useMemo(() => {
+    const match = text.match(VIDEO_ID_RE)
+    return match ? match[1] : null
+  }, [text])
+
+  const isPdf = ext === 'PDF'
+
+  const scoreRing = scorePercent >= 70
+    ? 'text-system-success'
+    : scorePercent >= 45
+      ? 'text-system-warning'
+      : 'text-gray-400'
+
+  const r = 16
+  const circ = 2 * Math.PI * r
+  const dash = (scorePercent / 100) * circ
 
   return (
-    <div className="rounded-xl border border-border bg-surface p-4 flex gap-4 items-start">
-      <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-gray-100 text-gray-500 shrink-0">
-        <span className="text-[10px] font-bold leading-none">{ext}</span>
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap mb-1">
-          <span className="text-sm font-medium text-text-primary truncate">{filename}</span>
-          <span className="text-xs text-text-tertiary">Page {chunkIndex + 1}</span>
-          <span className={`inline-flex px-2 py-0.5 rounded text-xs font-semibold border ${scoreColor}`}>
-            {scorePercent}%
-          </span>
+    <div className="group rounded-xl border border-border bg-surface hover:border-gray-400 transition-all duration-200 overflow-hidden">
+      {/* Header bar */}
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-border/60 bg-card/40">
+        {/* File type icon */}
+        <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-brand-charcoal shrink-0">
+          {isPdf ? (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="text-white">
+              <path d="M6 2h9l5 5v15a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+              <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+              <path d="M8 13h2.5a1.25 1.25 0 100-2.5H8v5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M13 10.5h1.5a1.75 1.75 0 110 3.5H13v-3.5z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="text-white">
+              <path d="M6 2h9l5 5v15a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+              <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+              <path d="M8 13h8M8 17h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+            </svg>
+          )}
         </div>
-        <p className="text-sm text-text-secondary whitespace-pre-wrap break-words">
-          {expanded ? text : snippet}{!expanded && hasMore ? '...' : ''}
+
+        {/* Title + meta */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-text-primary truncate">{filename}</span>
+            <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-brand-charcoal/10 text-text-tertiary">
+              {ext}
+            </span>
+          </div>
+          <span className="text-xs text-text-tertiary">Page {chunkIndex + 1}</span>
+        </div>
+
+        {/* Relevance ring */}
+        <div className="shrink-0 relative flex items-center justify-center w-11 h-11" title={`${scorePercent}% relevance`}>
+          <svg width="44" height="44" viewBox="0 0 44 44" className="absolute inset-0">
+            <circle cx="22" cy="22" r={r} fill="none" stroke="currentColor" strokeWidth="3" className="text-gray-200" />
+            <circle
+              cx="22" cy="22" r={r} fill="none" strokeWidth="3"
+              stroke="currentColor" className={scoreRing}
+              strokeDasharray={`${dash} ${circ}`}
+              strokeLinecap="round"
+              transform="rotate(-90 22 22)"
+            />
+          </svg>
+          <span className="relative text-xs font-bold text-text-primary">{scorePercent}%</span>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="px-4 py-3">
+        <p className="text-[13px] leading-relaxed text-text-secondary whitespace-pre-wrap break-words">
+          {expanded ? text : snippet}{!expanded && hasMore ? '…' : ''}
         </p>
         {hasMore && (
           <button
             type="button"
             onClick={() => setExpanded((p) => !p)}
-            className="mt-1 text-xs text-accent hover:underline"
+            className="mt-1.5 text-xs font-medium text-accent hover:text-accent-hover transition-colors"
           >
-            {expanded ? 'Show less' : 'Show more'}
+            {expanded ? '▲ Show less' : '▼ Show more'}
           </button>
         )}
+      </div>
+
+      {/* Action bar */}
+      <div className="flex items-center gap-2 px-4 py-2.5 border-t border-border/60 bg-card/30">
+        {videoId && (
+          <Link
+            to={`/video/${videoId}`}
+            className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold bg-brand-charcoal text-white hover:bg-gray-700 transition-colors"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <rect x="2" y="4" width="20" height="16" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+              <path d="M10 9l5 3-5 3V9z" fill="currentColor"/>
+            </svg>
+            Watch Video
+          </Link>
+        )}
+        <a
+          href={`${API_BASE}/api/documents/file/${docId}/${encodeURIComponent(filename)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold border border-border text-text-primary hover:bg-card transition-colors"
+          title="Open source document"
+          onClick={(e) => {
+            if (isPdf) {
+              e.preventDefault()
+              window.open(`${API_BASE}/api/documents/file/${docId}/${encodeURIComponent(filename)}`, '_blank')
+            }
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+            <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M15 3h6v6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M10 14L21 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          View Source
+        </a>
       </div>
     </div>
   )
@@ -744,7 +857,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [entityDropdownVisible])
 
-  const allVideos = useMemo(() => [...SAMPLE_VIDEOS, ...apiVideos], [apiVideos])
+  const allVideos = useMemo(() => reorderWithPinned([...SAMPLE_VIDEOS, ...apiVideos]), [apiVideos])
 
   const filteredVideos = useMemo(() => {
     if (searchResults) {
@@ -755,16 +868,20 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
           return rel.label === activeRelevanceFilter
         })
       }
-      return results
+      return reorderWithPinned(results)
     }
     let list = allVideos
     if (activeCategory !== 'All') {
-      list = list.filter((v) => v.category === activeCategory)
+      const tag = activeCategory.toLowerCase()
+      list = list.filter((v) => {
+        const tags = (v.tags ?? []).map((t) => t.toLowerCase())
+        return tags.includes(tag)
+      })
     }
     if (sortBy === 'name') {
       list = [...list].sort((a, b) => a.title.localeCompare(b.title))
     }
-    return list
+    return reorderWithPinned(list)
   }, [allVideos, sortBy, activeCategory, searchResults, activeRelevanceFilter])
 
   const relevanceCounts = useMemo(() => {
@@ -830,7 +947,6 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
     if (!hasQuery && !hasEntities && !hasImage) return
     setSearchError(null)
     setSearchLoading(true)
-    setDocResults(null)
     setActiveRelevanceFilter(null)
 
     let imageBase64: string | null = null
@@ -848,145 +964,114 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
       }
     }
 
-    const headers = { 'Content-Type': 'application/json' }
-
-    const videoBody: Record<string, unknown> = {
+    const body: Record<string, unknown> = {
       top_k: (hasEntities || hasImage) ? 12 : 18,
       clips_per_video: (hasEntities || hasImage) ? 2 : 3,
+      doc_top_k: 10,
     }
-    if (hasQuery) videoBody.query = query
-    if (hasEntities) videoBody.entity_ids = entityIds
-    if (imageBase64) videoBody.image_base64 = imageBase64
-
-    const videoFetch = fetch(`${API_BASE}/api/search/videos`, {
-      method: 'POST', headers, body: JSON.stringify(videoBody),
-    })
-    const docFetch = hasQuery
-      ? fetch(`${API_BASE}/api/documents/search`, {
-          method: 'POST', headers,
-          body: JSON.stringify({ query, top_k: 10 }),
-        })
-      : null
+    if (hasQuery) body.query = query
+    if (hasEntities) body.entity_ids = entityIds
+    if (imageBase64) body.image_base64 = imageBase64
 
     try {
-      const settled = await Promise.allSettled(
-        docFetch ? [videoFetch, docFetch] : [videoFetch],
-      )
+      const res = await fetch(`${API_BASE}/api/search/hybrid`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json().catch(() => ({}))
 
-      const videoSettled = settled[0]
-      if (videoSettled.status === 'fulfilled') {
-        const res = videoSettled.value
-        const data = await res.json().catch(() => ({}))
-        if (!res.ok) {
-          setSearchError(data.error || 'Search failed')
-          setSearchResults(null)
-        } else {
-          const results: VideoItem[] = (data.results || []).map((r: any) => {
-            const meta = r.metadata || {}
-            const analysis = meta.video_analysis as { categories?: string[]; topics?: string[]; people?: string[]; riskLevel?: string } | undefined
-            let uploadDate = ''
-            try {
-              const u = meta.uploaded_at || ''
-              if (u) {
-                const d = new Date(u)
-                uploadDate = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}-${d.getFullYear()}`
-              }
-            } catch { uploadDate = meta.uploaded_at || '' }
-            const dur = r.duration_seconds ?? meta.duration_seconds
-            const riskLevel = analysis?.riskLevel
-            const validRisk = riskLevel === 'high' || riskLevel === 'medium' || riskLevel === 'low' ? riskLevel : undefined
-            const insights = meta.video_insights as { objects?: Array<{ object?: string }>; detected_faces?: Array<{ face_id?: number | string; face_path?: string }> } | undefined
-            const rawObjs = Array.isArray(insights?.objects) ? insights.objects : []
-            const detectedObjects = [...new Set(rawObjs.map((o) => (o && typeof o.object === 'string' ? o.object.trim() : '')).filter(Boolean))]
-            const detectedFaces = Array.isArray(insights?.detected_faces) ? insights.detected_faces : []
-            const entities: TableEntity[] = detectedFaces.map((f, i) => {
-              let faceId: number
-              if (typeof f.face_id === 'number' && Number.isInteger(f.face_id)) {
-                faceId = f.face_id
-              } else if (typeof f.face_id === 'string' && /^\d+$/.test(f.face_id)) {
-                faceId = parseInt(f.face_id, 10)
-              } else if (f.face_path && typeof f.face_path === 'string') {
-                const m = f.face_path.match(/face_(\d+)\.png/)
-                faceId = m ? parseInt(m[1], 10) : i
-              } else {
-                faceId = i
-              }
-              return {
-                id: `face-${r.id}-${faceId}`,
-                name: `Face ${faceId + 1}`,
-                imageUrl: `${API_BASE}/api/videos/${r.id}/faces/${faceId}`,
-                initials: `F${faceId + 1}`,
-              }
-            })
-            return {
-              id: r.id,
-              title: meta.filename || r.id,
-              uploadDate,
-              duration: dur != null ? formatSecondsToTimestamp(dur) : '—',
-              totalMinutes: dur != null ? Math.ceil(dur / 60) : 0,
-              category: 'Uploaded',
-              tags: [
-                ...(Array.isArray(meta.tags) ? meta.tags : []),
-                meta.status === 'ready' ? 'Indexed' : meta.status === 'indexing' ? 'Indexing' : meta.status === 'queued' ? 'Queued' : 'Uploaded',
-              ],
-              entities,
-              streamUrl: r.stream_url || undefined,
-              thumbnailUrl: r.thumbnail_url || undefined,
-              thumbnailDataUrl: r.thumbnail_data_url || undefined,
-              durationSeconds: dur ?? undefined,
-              clips: Array.isArray(r.clips) ? r.clips : [],
-              searchScore: r.score,
-              categories: Array.isArray(analysis?.categories) ? analysis.categories : undefined,
-              aboutTopics: Array.isArray(analysis?.topics) ? analysis.topics : undefined,
-              people: Array.isArray(analysis?.people) ? analysis.people : undefined,
-              riskLevel: validRisk,
-              detectedObjects: detectedObjects.length > 0 ? detectedObjects : undefined,
-            }
-          })
-          const displayQuery = data.query ?? (hasQuery ? query : (hasEntities ? `Entity: ${searchAttachments.filter((a) => a.type === 'entity').map((a) => a.name).join(', ')}` : query))
-          setSearchResults({ query: displayQuery, results })
-          try {
-            const persistedAttachments = searchAttachments.map((att) => {
-              if (att.type === 'image') {
-                let previewUrl = att.previewUrl
-                if (imageBase64) {
-                  const mime = att.file?.type || 'image/jpeg'
-                  previewUrl = `data:${mime};base64,${imageBase64}`
-                }
-                return {
-                  id: att.id,
-                  type: att.type,
-                  name: att.name,
-                  previewUrl,
-                }
-              }
-              return {
-                id: att.id,
-                type: att.type,
-                name: att.name,
-                previewUrl: att.previewUrl,
-              }
-            })
-            sessionStorage.setItem('vc_last_search', JSON.stringify({ query: displayQuery, results, attachments: persistedAttachments }))
-          } catch { /* ignore */ }
-        }
-      } else {
-        setSearchError('Search request failed')
+      if (!res.ok) {
+        setSearchError(data.error || 'Search failed')
         setSearchResults(null)
+        return
       }
 
-      if (docFetch && settled.length > 1) {
-        const docSettled = settled[1]
-        if (docSettled && docSettled.status === 'fulfilled') {
-          try {
-            const docRes = (docSettled as PromiseFulfilledResult<Response>).value
-            if (docRes && docRes.ok) {
-              const docData = await docRes.json()
-              setDocResults(Array.isArray(docData.results) ? docData.results : null)
-            }
-          } catch { /* doc search failed silently */ }
+      const videoItems: VideoItem[] = (data.videoResults || []).map((r: any) => {
+        const meta = r.metadata || {}
+        const analysis = meta.video_analysis as { categories?: string[]; topics?: string[]; people?: string[]; riskLevel?: string } | undefined
+        let uploadDate = ''
+        try {
+          const u = meta.uploaded_at || ''
+          if (u) {
+            const d = new Date(u)
+            uploadDate = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}-${d.getFullYear()}`
+          }
+        } catch { uploadDate = meta.uploaded_at || '' }
+        const dur = r.duration_seconds ?? meta.duration_seconds
+        const riskLevel = analysis?.riskLevel
+        const validRisk = riskLevel === 'high' || riskLevel === 'medium' || riskLevel === 'low' ? riskLevel : undefined
+        const insights = meta.video_insights as { objects?: Array<{ object?: string }>; detected_faces?: Array<{ face_id?: number | string; face_path?: string }> } | undefined
+        const rawObjs = Array.isArray(insights?.objects) ? insights.objects : []
+        const detectedObjects = [...new Set(rawObjs.map((o) => (o && typeof o.object === 'string' ? o.object.trim() : '')).filter(Boolean))]
+        const detectedFaces = Array.isArray(insights?.detected_faces) ? insights.detected_faces : []
+        const entities: TableEntity[] = detectedFaces.map((f, i) => {
+          let faceId: number
+          if (typeof f.face_id === 'number' && Number.isInteger(f.face_id)) {
+            faceId = f.face_id
+          } else if (typeof f.face_id === 'string' && /^\d+$/.test(f.face_id)) {
+            faceId = parseInt(f.face_id, 10)
+          } else if (f.face_path && typeof f.face_path === 'string') {
+            const m = f.face_path.match(/face_(\d+)\.png/)
+            faceId = m ? parseInt(m[1], 10) : i
+          } else {
+            faceId = i
+          }
+          return {
+            id: `face-${r.id}-${faceId}`,
+            name: `Face ${faceId + 1}`,
+            imageUrl: `${API_BASE}/api/videos/${r.id}/faces/${faceId}`,
+            initials: `F${faceId + 1}`,
+          }
+        })
+        return {
+          id: r.id,
+          title: meta.filename || r.id,
+          uploadDate,
+          duration: dur != null ? formatSecondsToTimestamp(dur) : '—',
+          totalMinutes: dur != null ? Math.ceil(dur / 60) : 0,
+          category: 'Uploaded',
+          tags: [
+            ...(Array.isArray(meta.tags) ? meta.tags : []),
+            meta.status === 'ready' ? 'Indexed' : meta.status === 'indexing' ? 'Indexing' : meta.status === 'queued' ? 'Queued' : 'Uploaded',
+          ],
+          entities,
+          streamUrl: r.stream_url || undefined,
+          thumbnailUrl: r.thumbnail_url || undefined,
+          thumbnailDataUrl: r.thumbnail_data_url || undefined,
+          durationSeconds: dur ?? undefined,
+          clips: Array.isArray(r.clips) ? r.clips : [],
+          searchScore: r.score,
+          categories: Array.isArray(analysis?.categories) ? analysis.categories : undefined,
+          aboutTopics: Array.isArray(analysis?.topics) ? analysis.topics : undefined,
+          people: Array.isArray(analysis?.people) ? analysis.people : undefined,
+          riskLevel: validRisk,
+          detectedObjects: detectedObjects.length > 0 ? detectedObjects : undefined,
         }
+      })
+
+      const displayQuery = data.query ?? (hasQuery ? query : (hasEntities ? `Entity: ${searchAttachments.filter((a) => a.type === 'entity').map((a) => a.name).join(', ')}` : query))
+      setSearchResults({ query: displayQuery, results: videoItems })
+
+      if (Array.isArray(data.documents) && data.documents.length > 0) {
+        setDocResults(data.documents)
       }
+
+      try {
+        const persistedAttachments = searchAttachments.map((att) => {
+          if (att.type === 'image') {
+            let previewUrl = att.previewUrl
+            if (imageBase64) {
+              const mime = att.file?.type || 'image/jpeg'
+              previewUrl = `data:${mime};base64,${imageBase64}`
+            }
+            return { id: att.id, type: att.type, name: att.name, previewUrl }
+          }
+          return { id: att.id, type: att.type, name: att.name, previewUrl: att.previewUrl }
+        })
+        const persistedDocs = Array.isArray(data.documents) && data.documents.length > 0 ? data.documents : docResults
+        sessionStorage.setItem('vc_last_search', JSON.stringify({ query: displayQuery, results: videoItems, attachments: persistedAttachments, documents: persistedDocs }))
+      } catch { /* ignore */ }
     } catch (e) {
       setSearchError('Search request failed')
       setSearchResults(null)
@@ -999,7 +1084,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
     try {
       const raw = sessionStorage.getItem('vc_last_search')
       if (raw) {
-        const parsed = JSON.parse(raw) as { query: string; results: VideoItem[]; attachments?: SearchAttachment[] }
+        const parsed = JSON.parse(raw) as { query: string; results: VideoItem[]; attachments?: SearchAttachment[]; documents?: DocResult[] }
         if (parsed?.query != null && Array.isArray(parsed.results)) {
           setSearchQuery(parsed.query)
           setSearchResults({ query: parsed.query, results: parsed.results })
@@ -1008,6 +1093,9 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
             const entities = parsed.attachments.filter((a) => a.type === 'entity')
             const lastEntity = entities[entities.length - 1]
             setSearchAttachments(lastEntity ? [...nonEntity, lastEntity] : nonEntity)
+          }
+          if (Array.isArray(parsed.documents) && parsed.documents.length > 0) {
+            setDocResults(parsed.documents)
           }
         }
       }
@@ -1410,6 +1498,56 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
         </div>
       </div>
 
+      {/* ─── Document results (NeMo Retriever) ─── */}
+      {docResults && docResults.length > 0 && (
+        <div className="mb-8">
+          <button
+            type="button"
+            onClick={() => setDocsExpanded((prev) => !prev)}
+            className="flex items-center gap-2.5 mb-4 group"
+          >
+            <svg
+              className={`w-4 h-4 text-text-tertiary transition-transform duration-200 ${docsExpanded ? 'rotate-90' : ''}`}
+              viewBox="0 0 16 16" fill="currentColor"
+            >
+              <path d="M6 3.5L10.5 8 6 12.5V3.5Z" />
+            </svg>
+            <div className="flex items-center gap-2">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="text-text-secondary">
+                <path d="M6 2h9l5 5v15a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+                <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+                <path d="M8 13h8M8 17h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+              </svg>
+              <h3 className="text-sm font-semibold text-text-primary group-hover:text-accent transition-colors">
+                Documents
+              </h3>
+              <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-brand-charcoal text-white">
+                {docResults.length}
+              </span>
+            </div>
+          </button>
+          {docsExpanded && (
+            <div className="grid gap-4">
+              {docResults.map((doc) => {
+                const ext = doc.filename.split('.').pop()?.toUpperCase() || 'DOC'
+                const scorePercent = Math.round(doc.score * 100)
+                return (
+                  <DocResultCard
+                    key={doc.id}
+                    ext={ext}
+                    filename={doc.filename}
+                    chunkIndex={doc.chunk_index}
+                    text={doc.text}
+                    scorePercent={scorePercent}
+                    docId={doc.doc_id}
+                  />
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ─── Videos view ─── */}
       {viewMode === 'videos' && (
         <>
@@ -1573,50 +1711,6 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
             </div>
           )}
         </>
-      )}
-
-      {/* ─── Document results (NeMo Retriever) ─── */}
-      {docResults && docResults.length > 0 && (
-        <div className="mb-6">
-          <button
-            type="button"
-            onClick={() => setDocsExpanded((prev) => !prev)}
-            className="flex items-center gap-2 mb-3 group"
-          >
-            <svg
-              className={`w-4 h-4 text-text-tertiary transition-transform ${docsExpanded ? 'rotate-90' : ''}`}
-              viewBox="0 0 16 16" fill="currentColor"
-            >
-              <path d="M6 3.5L10.5 8 6 12.5V3.5Z" />
-            </svg>
-            <h3 className="text-sm font-semibold text-text-primary group-hover:text-accent transition-colors">
-              Documents ({docResults.length} result{docResults.length !== 1 ? 's' : ''})
-            </h3>
-          </button>
-          {docsExpanded && (
-            <div className="grid gap-3">
-              {docResults.map((doc) => {
-                const ext = doc.filename.split('.').pop()?.toUpperCase() || 'DOC'
-                const scorePercent = Math.round(doc.score * 100)
-                const scoreColor =
-                  scorePercent >= 80 ? 'bg-green-100 text-green-800 border-green-200'
-                  : scorePercent >= 60 ? 'bg-amber-100 text-amber-800 border-amber-200'
-                  : 'bg-gray-100 text-gray-600 border-gray-200'
-                return (
-                  <DocResultCard
-                    key={doc.id}
-                    ext={ext}
-                    filename={doc.filename}
-                    chunkIndex={doc.chunk_index}
-                    text={doc.text}
-                    scorePercent={scorePercent}
-                    scoreColor={scoreColor}
-                  />
-                )
-              })}
-            </div>
-          )}
-        </div>
       )}
 
       {/* ─── Tabular view (data from video analysis metadata) ─── */}

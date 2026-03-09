@@ -5,14 +5,17 @@ Calls ONLY app.services.nemo_retriever — no imports from the video pipeline.
 """
 
 import logging
+import mimetypes
 import os
 import tempfile
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
 from app.services.nemo_retriever import (
     ALLOWED_EXTENSIONS,
     MAX_DOC_SIZE,
+    S3_BUCKET,
+    S3_DOC_PREFIX,
     embed_query,
     ingest_document,
     list_docs,
@@ -108,3 +111,34 @@ def api_search_documents():
     except Exception as exc:
         log.error("Document search failed: %s", exc, exc_info=True)
         return jsonify({"error": str(exc)}), 500
+
+
+@documents_bp.route("/file/<doc_id>/<path:filename>", methods=["GET"])
+def api_serve_document(doc_id: str, filename: str):
+    """Serve an uploaded document file back to the browser (PDF inline, others as download)."""
+    doc_id = (doc_id or "").strip()
+    if not doc_id or ".." in doc_id or "/" in doc_id:
+        return jsonify({"error": "Invalid doc_id"}), 400
+
+    ext = os.path.splitext(filename)[1].lower() or ".pdf"
+    key = f"{S3_DOC_PREFIX}/{doc_id}{ext}"
+    mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+
+    if S3_BUCKET:
+        import boto3
+        try:
+            s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+            obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
+            body = obj["Body"].read()
+            disposition = "inline" if ext == ".pdf" else f'attachment; filename="{filename}"'
+            return Response(body, mimetype=mime, headers={"Content-Disposition": disposition})
+        except Exception as exc:
+            log.warning("Failed to fetch document from S3: %s", exc)
+            return jsonify({"error": "Document file not found"}), 404
+    else:
+        from pathlib import Path
+        local_path = Path(__file__).resolve().parent.parent.parent / "data" / S3_DOC_PREFIX / f"{doc_id}{ext}"
+        if not local_path.exists():
+            return jsonify({"error": "Document file not found"}), 404
+        disposition = "inline" if ext == ".pdf" else f'attachment; filename="{filename}"'
+        return Response(local_path.read_bytes(), mimetype=mime, headers={"Content-Disposition": disposition})

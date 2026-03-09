@@ -285,16 +285,35 @@ def api_list_videos():
     return jsonify(result)
 
 
-@videos_bp.route("/<video_id>/analysis", methods=["POST"])
+@videos_bp.route("/<video_id>/analysis", methods=["POST", "DELETE"])
 def api_generate_video_analysis(video_id: str):
     video_id = (video_id or "").strip()
     if not video_id:
         return jsonify({"error": "video_id is required"}), 400
-    log.info("[ANALYSIS] Starting analysis for video_id=%s", video_id)
+    log.info("[ANALYSIS] %s request for video_id=%s", request.method, video_id)
     entry = index_get_entry(video_id)
     if not entry:
         log.warning("[ANALYSIS] Video not found in index: video_id=%s", video_id)
         return jsonify({"error": "Video not found in index. Use a video ID from the videos list (e.g. from Uploads).", "video_id": video_id}), 404
+
+    meta = entry.get("metadata") or {}
+
+    # ── DELETE: remove stored analysis (description, categories, topics, risks, transcript) for this video only ──
+    if request.method == "DELETE":
+        if "video_analysis" in meta:
+            meta.pop("video_analysis", None)
+
+        # Persist metadata update back into the vector index
+        idx = vs_index()
+        for rec in idx:
+            if rec.get("id") == video_id:
+                rec["metadata"] = meta
+                break
+        vs_save()
+        invalidate_video_cache()
+        log.info("[ANALYSIS] Cleared video_analysis metadata for video_id=%s", video_id)
+        return jsonify({"video_id": video_id, "cleared": True}), 200
+
     s3_uri = video_id_to_s3_uri(video_id)
     if not s3_uri:
         log.warning("[ANALYSIS] No S3 location for video_id=%s", video_id)
@@ -473,7 +492,7 @@ def api_video_object_frame_cached(video_id: str, filename: str):
     return Response(data, mimetype="image/jpeg")
 
 
-@videos_bp.route("/<video_id>/insights", methods=["GET", "POST"])
+@videos_bp.route("/<video_id>/insights", methods=["GET", "POST", "DELETE"])
 def api_video_insights(video_id: str):
     video_id = (video_id or "").strip()
     if not video_id:
@@ -487,6 +506,26 @@ def api_video_insights(video_id: str):
             "video_id": video_id,
         }), 404
     meta = entry.get("metadata") or {}
+    # ── DELETE: remove cached insights metadata for this video ──
+    if request.method == "DELETE":
+        # Remove insights and any derived face-presence cache from the index
+        if "video_insights" in meta:
+            meta.pop("video_insights", None)
+        # Face presence is derived entirely from insights; clear so it can be recomputed later.
+        if "face_presence" in meta:
+            meta.pop("face_presence", None)
+
+        # Persist changes back to the vector store
+        idx = vs_index()
+        for rec in idx:
+            if rec.get("id") == video_id:
+                rec["metadata"] = meta
+                break
+        vs_save()
+        invalidate_video_cache()
+        log.info("[INSIGHTS] Cleared insights metadata for video_id=%s", video_id)
+        return jsonify({"video_id": video_id, "cleared": True}), 200
+
     s3_uri = video_id_to_s3_uri(video_id)
     output_uri = meta.get("output_s3_uri") or f"{S3_EMBEDDINGS_OUTPUT}/{video_id}"
     is_ready = meta.get("status") == "ready"
