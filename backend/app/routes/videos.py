@@ -1,3 +1,4 @@
+import base64
 import logging
 import random
 import subprocess
@@ -326,6 +327,8 @@ def api_generate_video_analysis(video_id: str):
         t0 = _time.perf_counter()
         raw_text = pegasus_analyze_video(s3_uri, VIDEO_ANALYSIS_PROMPT)
         log.info("[ANALYSIS] Pegasus response received in %.1fs (len=%d)", _time.perf_counter() - t0, len(raw_text or ""))
+        log.info("[ANALYSIS] ── RAW PEGASUS RESPONSE START ──\n%s", raw_text)
+        log.info("[ANALYSIS] ── RAW PEGASUS RESPONSE END ──")
         analysis_dict = parse_video_analysis_response(raw_text)
         if not analysis_dict:
             log.error("[ANALYSIS] Failed to parse Pegasus response as JSON for video_id=%s", video_id)
@@ -334,6 +337,14 @@ def api_generate_video_analysis(video_id: str):
                 "video_id": video_id,
                 "raw_preview": (raw_text[:500] + "..." if len(raw_text) > 500 else raw_text),
             }), 422
+        log.info(
+            "[ANALYSIS] Parsed dict keys=%s title=%r categories_type=%s risks_len=%s transcript_len=%s",
+            list(analysis_dict.keys()),
+            (analysis_dict.get("title") or "")[:60],
+            type(analysis_dict.get("categories")).__name__,
+            len(analysis_dict.get("risks", [])) if isinstance(analysis_dict.get("risks"), list) else "N/A",
+            len(analysis_dict.get("transcript", [])) if isinstance(analysis_dict.get("transcript"), list) else "N/A",
+        )
         analysis = normalize_video_analysis(analysis_dict)
         log.info(
             "[ANALYSIS] Parsed OK: title=%r categories=%d topics=%d risks=%d transcript_segments=%d riskLevel=%s",
@@ -537,11 +548,15 @@ def api_video_insights(video_id: str):
             log.info("[INSIGHTS] No cached insights for video_id=%s", video_id)
             return jsonify({"video_id": video_id, "insights": None})
         insights = dict(raw_insights)
-        objects = list(insights.get("objects") or [])
+        objects = list(insights.get("objects") or [])[:8]
         insights["objects"] = []
         for ob in objects:
             ob_copy = dict(ob)
             ts = ob_copy.get("timestamp")
+            if not ob_copy.get("frame_base64") and ob_copy.get("frame_path"):
+                frame_data = load_object_frame_from_disk(video_id, ob_copy["frame_path"])
+                if frame_data:
+                    ob_copy["frame_base64"] = base64.b64encode(frame_data).decode("utf-8")
             if ob_copy.get("frame_path"):
                 ob_copy["frame_url"] = f"/api/videos/{video_id}/object-frames/{ob_copy['frame_path']}"
             elif ts is not None:
@@ -551,7 +566,7 @@ def api_video_insights(video_id: str):
         insights["detected_faces"] = []
         for f in faces:
             f_copy = dict(f)
-            if f_copy.get("face_path"):
+            if not f_copy.get("image_base64") and f_copy.get("face_path"):
                 from_disk = load_face_from_disk(video_id, f_copy["face_path"])
                 if from_disk:
                     f_copy["image_base64"] = from_disk
@@ -591,6 +606,7 @@ def api_video_insights(video_id: str):
         # ────────────────────────────────────────────────────
         # STEP 2 — Process objects: extract frame + bbox
         # ────────────────────────────────────────────────────
+        MAX_OBJECTS = 8
         seen = set()
         out_objects = []
         for ob in objects_raw:
@@ -598,6 +614,8 @@ def api_video_insights(video_id: str):
             if key in seen:
                 continue
             seen.add(key)
+            if len(out_objects) >= MAX_OBJECTS:
+                break
             ob_copy = dict(ob)
             ts = ob_copy["timestamp"]
             ob_copy["frame_url"] = f"/api/videos/{video_id}/frame?t={ts}"
@@ -754,21 +772,22 @@ def api_video_insights(video_id: str):
         # ────────────────────────────────────────────────────
         # Build and persist insights (save to index without large base64 when on disk)
         # ────────────────────────────────────────────────────
+        objects_to_save = []
+        for ob in out_objects:
+            ob_save = dict(ob)
+            if ob_save.get("frame_path"):
+                frame_data = load_object_frame_from_disk(video_id, ob_save["frame_path"])
+                if frame_data:
+                    ob_save["frame_base64"] = base64.b64encode(frame_data).decode("utf-8")
+            objects_to_save.append(ob_save)
+
         insights = {
-            "objects": out_objects,
+            "objects": objects_to_save,
             "detected_faces": detected_faces,
             "keyframes": keyframes_info,
             "video_duration_sec": video_duration_sec,
         }
-        insights_to_save = {
-            "objects": out_objects,
-            "detected_faces": [
-                {**f, "image_base64": "" if f.get("face_path") else f.get("image_base64", "")}
-                for f in detected_faces
-            ],
-            "keyframes": keyframes_info,
-            "video_duration_sec": video_duration_sec,
-        }
+        insights_to_save = insights
         idx = vs_index()
         for rec in idx:
             if rec.get("id") == video_id:

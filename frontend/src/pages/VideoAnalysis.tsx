@@ -77,6 +77,7 @@ type DetectedFace = {
 type ObjectInsight = {
   object: string
   timestamp: number
+  frame_base64?: string
   frame_url?: string
   bbox?: { left: number; top: number; width: number; height: number }
 }
@@ -770,20 +771,25 @@ function PdfReportModal({
       addBody(`${objectsCount} object(s) detected with timestamps.`)
       const objectImages = await Promise.all(
         objects.map(async (obj) => {
-          if (!obj.frame_url) return null
-          try {
-            const res = await fetch(`${API_BASE}${obj.frame_url}`)
-            if (!res.ok) return null
-            const blob = await res.blob()
-            return new Promise<string>((resolve, reject) => {
-              const r = new FileReader()
-              r.onload = () => resolve(r.result as string)
-              r.onerror = reject
-              r.readAsDataURL(blob)
-            })
-          } catch {
-            return null
+          if (obj.frame_base64) {
+            return `data:image/jpeg;base64,${obj.frame_base64}`
           }
+          if (obj.frame_url) {
+            try {
+              const res = await fetch(`${API_BASE}${obj.frame_url}`)
+              if (!res.ok) return null
+              const blob = await res.blob()
+              return new Promise<string>((resolve, reject) => {
+                const r = new FileReader()
+                r.onload = () => resolve(r.result as string)
+                r.onerror = reject
+                r.readAsDataURL(blob)
+              })
+            } catch {
+              return null
+            }
+          }
+          return null
         })
       )
       const maxObjW = 35
@@ -1273,12 +1279,14 @@ export default function VideoAnalysis() {
       const res = await fetch(`${API_BASE}/api/videos/${encodeURIComponent(videoId)}/analysis`, { method: 'POST' })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        if (mountedRef.current) setAnalysisError(data?.error ?? `HTTP ${res.status}`)
-        return
+        const msg = data?.error ?? `HTTP ${res.status}`
+        if (mountedRef.current) setAnalysisError(msg)
+        throw new Error(msg)
       }
       await refreshCache(true)
     } catch (e: any) {
       if (mountedRef.current) setAnalysisError(e?.message ?? 'Request failed')
+      throw e
     } finally {
       if (mountedRef.current) setGeneratingAnalysis(false)
     }
@@ -2118,7 +2126,11 @@ export default function VideoAnalysis() {
                   {objectsList.map((obj, i) => {
                     const ts = obj.timestamp
                     const timeStr = fmtSec(ts)
-                    const frameUrl = obj.frame_url ? `${API_BASE}${obj.frame_url}` : null
+                    const frameUrl = obj.frame_base64
+                      ? `data:image/jpeg;base64,${obj.frame_base64}`
+                      : obj.frame_url
+                      ? `${API_BASE}${obj.frame_url}`
+                      : null
                     const bbox = obj.bbox
                     return (
                       <div

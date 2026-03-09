@@ -382,22 +382,22 @@ ASK_VIDEO_SYSTEM_PROMPT = """You are answering questions about a video. For ever
 Answer the user's question clearly and cite timestamps for every relevant moment."""
 
 
-VIDEO_ANALYSIS_PROMPT = """Analyze this video and respond with exactly one JSON object, no other text or markdown. Use this structure only:
+VIDEO_ANALYSIS_PROMPT = """Analyze this video and respond with ONLY a single JSON object. Do NOT include any text, explanation, or markdown before or after the JSON. Your entire response must be parseable by JSON.parse().
 
 {
-  "title": "Short title for the video (e.g. Office Walkthrough — Building A, Floor 3)",
-  "description": "One or two paragraph summary: what the video shows, context (e.g. compliance review, inspection), key areas covered, and who recorded it if evident.",
-  "categories": ["Category1", "Category2", "Category3"],
-  "topics": ["Topic1", "Topic2", "Topic3", "Topic4"],
+  "title": "Short title for the video",
+  "description": "One or two paragraph summary of what the video shows.",
+  "categories": ["Category1", "Category2"],
+  "topics": ["Topic1", "Topic2", "Topic3"],
   "people": ["Name1", "Name2"],
-  "riskLevel": "high" or "medium" or "low",
+  "riskLevel": "medium",
   "risks": [
-    { "label": "Brief issue description", "severity": "high" or "medium" or "low", "timestamp": "M:SS" }
+    {"label": "Brief issue description", "severity": "high", "timestamp": "1:23"}
   ],
   "transcript": [
-    { "time": "0:00", "text": "First words spoken at the start of the video" },
-    { "time": "0:15", "text": "Next utterance..." },
-    { "time": "1:30", "text": "Continue through to the end..." }
+    {"time": "0:00", "text": "First words spoken at the start of the video"},
+    {"time": "0:15", "text": "Next utterance..."},
+    {"time": "1:30", "text": "Continue through to the end..."}
   ]
 }
 
@@ -405,9 +405,10 @@ Rules:
 - categories: 2–4 high-level labels (e.g. Workplace Safety, Facility Inspection, Compliance Audit).
 - topics: 3–6 specific subjects covered (e.g. Fire safety equipment, Emergency exits, Workspace layout).
 - people: optional array of distinct people identified in the video (names mentioned in speech, officer names, interviewees, etc.). Use empty array [] if none identified.
-- riskLevel: overall risk for the video. risks: list every compliance or safety issue you notice. Each risk must have: label (short description), severity (high/medium/low), and timestamp (when in the video it occurs). Use M:SS or MM:SS (zero-padded) for timestamp (e.g. "0:00", "2:14", "02:14", "12:05"). These timestamps will be displayed with a [M:SS] or [MM:SS] tag for navigation.
+- riskLevel: must be exactly one of "high", "medium", or "low".
+- risks: list every compliance or safety issue you notice. severity must be exactly one of "high", "medium", or "low". timestamp must use M:SS or MM:SS format (e.g. "0:00", "2:14", "12:05").
 - transcript: produce a COMPLETE transcript for the ENTIRE video. CRITICAL: (1) The first segment MUST start at "0:00" (the very beginning). (2) The last segment MUST correspond to the end of the video—include speech right up to the final second. (3) Do not leave any time gaps: every part of the video from 0:00 to the end must be represented by transcript segments in chronological order. (4) Use verbatim or near-verbatim speech (word-for-word when possible). (5) Create a new segment every time the speaker changes or every 1–2 sentences; use timestamps in M:SS for the start of each segment. (6) For short videos use at least 15–20 segments; for longer videos use many more so the transcript is thorough. (7) Do not summarize, skip, or omit any part of the spoken content—transcribe what is said from beginning to end.
-- Use only double quotes and valid JSON. No trailing commas."""
+- CRITICAL: Use only double quotes. No trailing commas. No comments. Output ONLY the JSON object, nothing else."""
 
 
 TRANSCRIPT_PROMPT = """Generate a COMPLETE, DETAILED transcript of this video. Transcribe ALL spoken words from start to finish with no gaps or summaries.
@@ -462,29 +463,87 @@ def _timestamp_seconds_for_sort(ts: str) -> float:
         return 0.0
 
 
+def _repair_json_string(s: str) -> str:
+    """Best-effort fixes for common LLM JSON mistakes."""
+    s = re.sub(r",\s*([}\]])", r"\1", s)
+    s = re.sub(r':\s*"([^"]*?)"\s+or\s+"[^"]*?"(?:\s+or\s+"[^"]*?")*', r': "\1"', s)
+    s = s.replace("\\'", "'")
+    return s
+
+
+def _extract_outermost_json_object(text: str) -> str | None:
+    """Find the outermost { ... } span, respecting strings so inner braces don't confuse depth."""
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+_ANALYSIS_REQUIRED_KEYS = {"title", "transcript"}
+
+
 def parse_video_analysis_response(text: str) -> dict | None:
     if not text or not text.strip():
         return None
     raw = text.strip()
+
     m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw)
     if m:
         raw = m.group(1).strip()
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        start = raw.find("{")
-        if start >= 0:
-            depth = 0
-            for i in range(start, len(raw)):
-                if raw[i] == "{":
-                    depth += 1
-                elif raw[i] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        try:
-                            return json.loads(raw[start : i + 1])
-                        except json.JSONDecodeError:
-                            break
+
+    strategies: list[tuple[str, str]] = [
+        ("direct", raw),
+        ("repaired", _repair_json_string(raw)),
+    ]
+    outer = _extract_outermost_json_object(raw)
+    if outer and outer != raw:
+        strategies.append(("outermost_obj", outer))
+        strategies.append(("outermost_repaired", _repair_json_string(outer)))
+
+    for label, candidate in strategies:
+        try:
+            obj = json.loads(candidate)
+            if isinstance(obj, dict):
+                has_keys = _ANALYSIS_REQUIRED_KEYS.issubset(obj.keys())
+                log.info("[PARSE] Strategy '%s' succeeded: keys=%s has_required=%s", label, list(obj.keys()), has_keys)
+                if has_keys:
+                    return obj
+                log.warning("[PARSE] Strategy '%s' parsed OK but missing required keys, trying next…", label)
+        except json.JSONDecodeError as exc:
+            log.debug("[PARSE] Strategy '%s' failed: %s", label, exc)
+
+    for label, candidate in strategies:
+        try:
+            obj = json.loads(candidate)
+            if isinstance(obj, dict):
+                log.warning("[PARSE] Falling back to strategy '%s' (missing required keys)", label)
+                return obj
+        except json.JSONDecodeError:
+            continue
+
+    log.warning("[PARSE] All JSON extraction strategies failed for %d-char response", len(raw))
     return None
 
 

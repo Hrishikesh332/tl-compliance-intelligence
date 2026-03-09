@@ -1,10 +1,17 @@
 import json
+import logging
 import os
+import threading
+import time
 
 import boto3
+from botocore.config import Config
+from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 
 load_dotenv()
+
+log = logging.getLogger(__name__)
 
 PEGASUS_MODEL_ID = "twelvelabs.pegasus-1-2-v1:0"
 REGION_PREFIX = {
@@ -19,10 +26,33 @@ REGION_PREFIX = {
     "ap-southeast-1": "apac",
 }
 
+_BEDROCK_RETRY_CONFIG = Config(
+    retries={"max_attempts": 10, "mode": "adaptive"},
+    read_timeout=300,
+    connect_timeout=10,
+)
+
+# Singleton client — keeps adaptive retry's token bucket alive across calls
+_client_lock = threading.Lock()
+_client_instance = None
+
+# Serialize all Bedrock invocations so concurrent requests never compete
+_invoke_lock = threading.Lock()
+
 
 def _bedrock_client():
-    region = os.environ.get("AWS_REGION", "us-east-1")
-    return boto3.client("bedrock-runtime", region_name=region)
+    global _client_instance
+    if _client_instance is None:
+        with _client_lock:
+            if _client_instance is None:
+                region = os.environ.get("AWS_REGION", "us-east-1")
+                _client_instance = boto3.client(
+                    "bedrock-runtime",
+                    region_name=region,
+                    config=_BEDROCK_RETRY_CONFIG,
+                )
+                log.info("[Pegasus] Created singleton Bedrock client (region=%s, adaptive retries)", region)
+    return _client_instance
 
 
 def _inference_profile_id():
@@ -51,12 +81,22 @@ def analyze_video(s3_uri: str, prompt: str, bucket_owner: str | None = None) -> 
             }
         },
     }
-    response = client.invoke_model(
-        modelId=_inference_profile_id(),
-        body=json.dumps(body),
-        contentType="application/json",
-        accept="application/json",
-    )
+    payload = json.dumps(body)
+    model_id = _inference_profile_id()
+
+    with _invoke_lock:
+        t0 = time.perf_counter()
+        log.info("[Pegasus] Acquired invoke lock, calling Bedrock …")
+        try:
+            response = client.invoke_model(
+                modelId=model_id,
+                body=payload,
+                contentType="application/json",
+                accept="application/json",
+            )
+        finally:
+            log.info("[Pegasus] Bedrock call finished in %.1fs", time.perf_counter() - t0)
+
     out = json.loads(response["body"].read().decode("utf-8"))
     text = out.get("message") or out.get("output") or out.get("generatedText") or out.get("text") or ""
     if isinstance(text, list):
