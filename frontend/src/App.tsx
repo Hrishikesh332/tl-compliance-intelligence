@@ -146,27 +146,35 @@ function Shell() {
     }
   }, [mobileMenuOpen])
 
+  const handleBrandClick = () => {
+    const to = '/'
+    const isOnVideoPage = location.pathname.startsWith('/video/')
+    if (isOnVideoPage) {
+      window.location.href = to
+    } else {
+      navigate(to)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-background text-text-primary flex flex-col">
       <div className="relative" ref={menuRef}>
         <header className="bg-background px-4 py-3 flex items-center justify-between shrink-0 border-b border-border">
           <div className="flex items-center gap-3 min-w-0 flex-1 md:flex-initial">
-            <div className="flex items-center gap-2 mr-2 md:mr-6 min-w-0">
-              <button
-                type="button"
-                onClick={() => navigate('/')}
-                className="font-brand text-text-primary hover:opacity-80 transition-opacity cursor-pointer shrink-0 text-left bg-transparent border-0 p-0 no-underline block"
-                aria-label="Go to Overview"
-              >
-                <h1 className="text-base md:text-h5 font-medium truncate">
-                  <span className="md:hidden">Multi-Source Legal Investigator</span>
-                  <span className="hidden md:inline">Multi-Source Legal Evidence Investigator</span>
-                </h1>
-              </button>
-              <span className="hidden sm:inline-flex items-center px-2 py-1 rounded-sm border border-border bg-transparent text-text-secondary text-xs font-medium shrink-0 uppercase tracking-wide pointer-events-none select-none">
+            <button
+              type="button"
+              onClick={handleBrandClick}
+              className="flex items-center gap-2 mr-2 md:mr-6 min-w-0 font-brand text-text-primary hover:opacity-80 transition-opacity cursor-pointer text-left bg-transparent border-0 p-0 no-underline"
+              aria-label="Go to Overview"
+            >
+              <h1 className="text-base md:text-h5 font-medium truncate">
+                <span className="md:hidden">Multi-Source Legal Investigator</span>
+                <span className="hidden md:inline">Multi-Source Legal Evidence Investigator</span>
+              </h1>
+              <span className="hidden sm:inline-flex items-center px-2 py-1 rounded-sm border border-border bg-transparent text-text-secondary text-xs font-medium shrink-0 uppercase tracking-wide">
                 SAMPLE APP
               </span>
-            </div>
+            </button>
 
             {/* Desktop nav — hidden on mobile */}
             <nav className="hidden md:flex items-center gap-0.5">

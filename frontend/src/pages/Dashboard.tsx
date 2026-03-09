@@ -758,16 +758,14 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
     'Search with image and text across videos',
   ]
 
-  /** Predefined queries users can run — aligned with legal evidence & compliance use cases */
+  /** Predefined queries users can run — customized for current use cases */
   const SUGGESTED_SEARCHES = [
-    'person entering or leaving the building',
-    'vehicle stopping, collision, or crash',
-    'two people talking or in conversation',
-    'person running or moving quickly',
-    'object or hazard on the ground',
-    'car or truck in the parking lot',
-    'safety vest, helmet, or PPE',
-    'emergency exit or evacuation',
+    'Suspect vehicle maroon car investigation details',
+    'Police officer applying handcuffs to a suspect',
+    'Criminal investigation at the scene',
+    'suspicious vehicle investigation case',
+    'Vehicle burning incident',
+    'Car driving in a long road lane',
   ]
   const [placeholderIdx, setPlaceholderIdx] = useState(0)
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
@@ -1578,6 +1576,10 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                   <li className="flex items-center justify-center gap-1.5">
                     <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" aria-hidden />
                     Documents: NeMo Retriever
+                  </li>
+                  <li className="flex items-center justify-center gap-1.5">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" aria-hidden />
+                    Max file size: 100&nbsp;MB per video
                   </li>
                 </ul>
               </button>
