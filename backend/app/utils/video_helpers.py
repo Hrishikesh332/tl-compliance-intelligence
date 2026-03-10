@@ -1,6 +1,7 @@
 import base64
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -350,6 +351,26 @@ def invalidate_video_cache():
     _video_list_cache = None
 
 
+def compute_duration_seconds_from_embeddings(output_uri: str) -> float | None:
+    """
+    Best-effort duration from Bedrock video clip embeddings.
+    Returns max(endSec) across clip embeddings, or None if unavailable.
+    """
+    if not output_uri:
+        return None
+    try:
+        embs = load_video_embeddings_from_s3(output_uri) or []
+        clip_list = [c for c in embs if c.get("embeddingScope") == "clip"]
+        if not clip_list:
+            return None
+        dur = max(float(c.get("endSec") or 0.0) for c in clip_list)
+        if not math.isfinite(dur) or dur <= 0:
+            return None
+        return dur
+    except Exception:
+        return None
+
+
 def video_id_to_s3_uri(video_id: str) -> str | None:
     if not video_id:
         return None
@@ -382,32 +403,92 @@ ASK_VIDEO_SYSTEM_PROMPT = """You are answering questions about a video. For ever
 Answer the user's question clearly and cite timestamps for every relevant moment."""
 
 
+VIDEO_ANALYSIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string", "description": "Short title for the video"},
+        "description": {"type": "string", "description": "One or two paragraph summary"},
+        "categories": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 5,
+            "items": {"type": "string"},
+            "description": "4-5 high-level category labels",
+        },
+        "topics": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "3-6 specific subjects covered",
+        },
+        "people": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Names of people identified in the video",
+        },
+        "riskLevel": {
+            "type": "string",
+            "enum": ["high", "medium", "low"],
+        },
+        "risks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "label": {"type": "string"},
+                    "severity": {"type": "string", "enum": ["high", "medium", "low"]},
+                    "timestamp": {"type": "string"},
+                },
+                "required": ["label", "severity"],
+            },
+        },
+        "transcript": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "time": {"type": "string"},
+                    "text": {"type": "string"},
+                },
+                "required": ["time", "text"],
+            },
+        },
+    },
+    # Transcript is optional here because a separate endpoint can generate/complete
+    # the full transcript later; this keeps analysis responses small and robust.
+    "required": ["title", "description", "categories", "topics", "riskLevel", "risks"],
+}
+
 VIDEO_ANALYSIS_PROMPT = """Analyze this video and respond with ONLY a single JSON object. Do NOT include any text, explanation, or markdown before or after the JSON. Your entire response must be parseable by JSON.parse().
 
 {
   "title": "Short title for the video",
   "description": "One or two paragraph summary of what the video shows.",
-  "categories": ["Category1", "Category2"],
+        "categories": ["Category1", "Category2", "Category3", "Category4"],
   "topics": ["Topic1", "Topic2", "Topic3"],
-  "people": ["Name1", "Name2"],
-  "riskLevel": "medium",
-  "risks": [
+        "people": ["Name1", "Name2"],
+        "riskLevel": "medium",
+        "risks": [
     {"label": "Brief issue description", "severity": "high", "timestamp": "1:23"}
   ],
-  "transcript": [
-    {"time": "0:00", "text": "First words spoken at the start of the video"},
-    {"time": "0:15", "text": "Next utterance..."},
-    {"time": "1:30", "text": "Continue through to the end..."}
+        "transcript": [
+    {"time": "0:00", "text": "Key dialogue or event..."},
+    {"time": "0:45", "text": "Next important utterance..."}
   ]
 }
 
 Rules:
-- categories: 2–4 high-level labels (e.g. Workplace Safety, Facility Inspection, Compliance Audit).
+       - **PRIORITY**: Always ensure "title", "description", "categories", "topics", "people", "riskLevel", and "risks" are present and well-formed. These fields are more important than the transcript.
+- categories: 4–5 high-level labels (e.g. Workplace Safety, Facility Inspection, Compliance Audit).
 - topics: 3–6 specific subjects covered (e.g. Fire safety equipment, Emergency exits, Workspace layout).
 - people: optional array of distinct people identified in the video (names mentioned in speech, officer names, interviewees, etc.). Use empty array [] if none identified.
 - riskLevel: must be exactly one of "high", "medium", or "low".
 - risks: list every compliance or safety issue you notice. severity must be exactly one of "high", "medium", or "low". timestamp must use M:SS or MM:SS format (e.g. "0:00", "2:14", "12:05").
-- transcript: produce a COMPLETE transcript for the ENTIRE video. CRITICAL: (1) The first segment MUST start at "0:00" (the very beginning). (2) The last segment MUST correspond to the end of the video—include speech right up to the final second. (3) Do not leave any time gaps: every part of the video from 0:00 to the end must be represented by transcript segments in chronological order. (4) Use verbatim or near-verbatim speech (word-for-word when possible). (5) Create a new segment every time the speaker changes or every 1–2 sentences; use timestamps in M:SS for the start of each segment. (6) For short videos use at least 15–20 segments; for longer videos use many more so the transcript is thorough. (7) Do not summarize, skip, or omit any part of the spoken content—transcribe what is said from beginning to end.
+- transcript: include a SHORT "starter transcript" (not a complete word-for-word transcript). This is used for immediate UX while a separate endpoint can generate/complete the full transcript later.
+  - MUST include at least 10 segments.
+  - The first segment MUST start at "0:00".
+  - Cover the beginning of the video densely (first 2–3 minutes), then include a few representative segments from the middle and end.
+  - Keep segments short (1–2 sentences) so the response fits within length limits.
+  - Max 30–40 segments total.
 - CRITICAL: Use only double quotes. No trailing commas. No comments. Output ONLY the JSON object, nothing else."""
 
 
@@ -424,18 +505,69 @@ Requirements:
 Use double quotes. "time" must be M:SS or M:MM:SS. "text" is the spoken content. No trailing commas."""
 
 
+TRANSCRIPT_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "time": {"type": "string"},
+            "text": {"type": "string"},
+        },
+        "required": ["time", "text"],
+    },
+}
+
+
 def parse_transcript_response(text: str) -> list[dict]:
     """Parse transcript-only API response into list of { time, text } segments."""
     if not text or not text.strip():
         return []
     raw = text.strip()
-    m = re.search(r"\[[\s\S]*\]", raw)
-    if not m:
-        return []
+
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw)
+    if m:
+        raw = m.group(1).strip()
+
+    # 1) Direct JSON parse (preferred).
     try:
-        arr = json.loads(m.group(0))
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            arr = parsed
+        elif isinstance(parsed, dict) and isinstance(parsed.get("transcript"), list):
+            arr = parsed["transcript"]
+        else:
+            arr = None
     except json.JSONDecodeError:
-        return []
+        arr = None
+
+    # 2) Extract an outermost array span if the response wrapped it in extra text.
+    if arr is None:
+        m2 = re.search(r"\[[\s\S]*\]", raw)
+        if m2:
+            candidate = m2.group(0)
+            try:
+                arr = json.loads(candidate)
+            except json.JSONDecodeError:
+                repaired = _repair_truncated_json_any(candidate)
+                if repaired:
+                    try:
+                        arr = json.loads(repaired)
+                    except json.JSONDecodeError:
+                        arr = None
+
+    # 3) Last resort: attempt truncation repair on the whole raw response (array or object).
+    if arr is None:
+        repaired = _repair_truncated_json_any(raw)
+        if repaired:
+            try:
+                parsed = json.loads(repaired)
+                if isinstance(parsed, list):
+                    arr = parsed
+                elif isinstance(parsed, dict) and isinstance(parsed.get("transcript"), list):
+                    arr = parsed["transcript"]
+            except json.JSONDecodeError:
+                arr = None
+
     if not isinstance(arr, list):
         return []
     out = []
@@ -501,7 +633,137 @@ def _extract_outermost_json_object(text: str) -> str | None:
     return None
 
 
-_ANALYSIS_REQUIRED_KEYS = {"title", "transcript"}
+def _repair_truncated_json(text: str) -> str | None:
+    """Best-effort repair for JSON truncated mid-stream (e.g. model hit output token limit).
+
+    Walks the text tracking nesting depth and string state, then appends
+    whatever closing characters are needed so ``json.loads`` can succeed.
+    """
+    start = text.find("{")
+    if start < 0:
+        return None
+
+    s = text[start:]
+    stack: list[str] = []  # tracks '{' and '['
+    in_string = False
+    escape = False
+
+    for ch in s:
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            stack.append("{")
+        elif ch == "[":
+            stack.append("[")
+        elif ch == "}":
+            if stack and stack[-1] == "{":
+                stack.pop()
+            if not stack:
+                return s
+        elif ch == "]":
+            if stack and stack[-1] == "[":
+                stack.pop()
+
+    if not stack:
+        return s
+
+    repair = s
+    if in_string:
+        repair += '"'
+
+    stripped = repair.rstrip()
+    if stripped.endswith(":"):
+        repair = stripped + "null"
+    stripped = repair.rstrip()
+    if stripped.endswith(","):
+        repair = stripped[:-1]
+
+    for bracket in reversed(stack):
+        if bracket == "[":
+            repair += "]"
+        elif bracket == "{":
+            repair += "}"
+
+    return repair
+
+
+def _repair_truncated_json_any(text: str) -> str | None:
+    """Repair JSON truncated mid-stream for either an object or an array."""
+    if not text:
+        return None
+    s = str(text)
+    i_obj = s.find("{")
+    i_arr = s.find("[")
+    if i_obj < 0 and i_arr < 0:
+        return None
+    if i_obj < 0:
+        start = i_arr
+    elif i_arr < 0:
+        start = i_obj
+    else:
+        start = min(i_obj, i_arr)
+
+    s2 = s[start:]
+    stack: list[str] = []
+    in_string = False
+    escape = False
+
+    for ch in s2:
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            stack.append("{")
+        elif ch == "[":
+            stack.append("[")
+        elif ch == "}":
+            if stack and stack[-1] == "{":
+                stack.pop()
+            if not stack:
+                return s2
+        elif ch == "]":
+            if stack and stack[-1] == "[":
+                stack.pop()
+            if not stack:
+                return s2
+
+    if not stack:
+        return s2
+
+    repair = s2
+    if in_string:
+        repair += '"'
+
+    stripped = repair.rstrip()
+    if stripped.endswith(":"):
+        repair = stripped + "null"
+    stripped = repair.rstrip()
+    if stripped.endswith(","):
+        repair = stripped[:-1]
+
+    for bracket in reversed(stack):
+        repair += "]" if bracket == "[" else "}"
+    return repair
+
+
+_ANALYSIS_REQUIRED_KEYS = {"title", "description", "riskLevel"}
 
 
 def parse_video_analysis_response(text: str) -> dict | None:
@@ -522,6 +784,11 @@ def parse_video_analysis_response(text: str) -> dict | None:
         strategies.append(("outermost_obj", outer))
         strategies.append(("outermost_repaired", _repair_json_string(outer)))
 
+    truncated = _repair_truncated_json(raw)
+    if truncated and truncated != raw:
+        strategies.append(("truncated_repair", truncated))
+        strategies.append(("truncated_repaired", _repair_json_string(truncated)))
+
     for label, candidate in strategies:
         try:
             obj = json.loads(candidate)
@@ -529,6 +796,8 @@ def parse_video_analysis_response(text: str) -> dict | None:
                 has_keys = _ANALYSIS_REQUIRED_KEYS.issubset(obj.keys())
                 log.info("[PARSE] Strategy '%s' succeeded: keys=%s has_required=%s", label, list(obj.keys()), has_keys)
                 if has_keys:
+                    if "truncated" in label:
+                        log.warning("[PARSE] Response was truncated; recovered partial data via '%s'", label)
                     return obj
                 log.warning("[PARSE] Strategy '%s' parsed OK but missing required keys, trying next…", label)
         except json.JSONDecodeError as exc:
@@ -690,7 +959,7 @@ def get_frame_bytes(video_id: str, t: float) -> bytes | None:
                 "-i", url, "-vframes", "1", "-f", "image2", "pipe:1",
             ],
             capture_output=True,
-            timeout=30,
+            timeout=120,
             check=False,
         )
         elapsed = _time.perf_counter() - t0
@@ -706,6 +975,10 @@ def get_frame_bytes(video_id: str, t: float) -> bytes | None:
 
 
 BLUR_VARIANCE_THRESHOLD = 150
+
+# For "people/faces" extraction we prefer recall over strict sharpness.
+# Lower threshold means we accept blurrier (but still usable) frames.
+FACE_BLUR_VARIANCE_THRESHOLD = 40
 
 
 def is_frame_blurred(frame_bytes: bytes, threshold: float = BLUR_VARIANCE_THRESHOLD) -> bool:
@@ -740,7 +1013,7 @@ def get_face_from_video_frames(video_id: str, clips: list[dict]) -> str | None:
         frame_bytes = get_frame_bytes(video_id, t)
         if not frame_bytes:
             continue
-        if is_frame_blurred(frame_bytes):
+        if is_frame_blurred(frame_bytes, threshold=FACE_BLUR_VARIANCE_THRESHOLD):
             log.debug("Skipping blurred frame at t=%.1f", t)
             continue
         try:
@@ -771,11 +1044,18 @@ DETECT_PROMPT = """Analyze this video carefully and return a single JSON object 
 
    List each object with a short, descriptive tag (e.g. "Fire extinguisher", "Patrol car", "Officer badge", "Emergency exit sign"). Use the timestamp in seconds. Do NOT list purely decorative items (vase, painting, potted plant) unless they are relevant to the scene. Aim for 15–40 object tags if the video shows that much; do not skip items.
 
-2. "face_keyframes": Provide timestamps for UNIQUE, CLEAR faces only. Critical rules:
-   - Identify each DISTINCT INDIVIDUAL in the video. For each person, choose ONE timestamp where that person's face is MOST CLEARLY visible: front-facing or near front-facing, full face (eyes, nose, mouth), well-lit, not blurred, not obscured. We need one best frame per unique person—do not list the same person multiple times at different angles (e.g. front and profile of the same officer count as one person; pick the timestamp where their face is clearest).
-   - Include ONLY moments where the face is clearly identifiable: good lighting, face fills a reasonable part of the frame, looking at or toward the camera. Do NOT include: back of head, severe profile, face in shadow, face blocked by hands/mask/obstruction, person too far or blurry.
-   - List up to 5 timestamps—one per distinct individual. If there are 2 people in the video, list 2 timestamps (their clearest moment each). If 5 people, list 5. Do not duplicate the same person; do not add weak or duplicate-angle shots.
-   - Each entry: "timestamp" (seconds) and "description" (e.g. "Officer 1, face clear and front-facing").
+2. "face_keyframes": Provide timestamps for UNIQUE, CLEAR faces that are IDEAL for downstream face detection and cropping. Critical rules:
+   - Identify each DISTINCT INDIVIDUAL in the video.
+   - For each person, choose ONE timestamp where that person's face is:
+       * Front-facing or near front-facing (both eyes and mouth visible).
+       * As large as possible in the frame (face occupies a good portion of the image).
+       * In good, even lighting (not heavily shadowed, not blown out).
+       * Minimally blurred (little motion blur, sharp facial features).
+       * Not occluded (no major obstruction by hands, objects, other people, or UI overlays).
+   - Prefer moments when the person is relatively still (e.g., speaking to the camera, standing/sitting facing the officer) rather than running or turning quickly.
+   - Include ONLY moments where the face is clearly identifiable. Do NOT include: back of head, strong profile-only views, face in deep shadow, heavy motion blur, masks that hide most of the face, or faces that are very small in the frame.
+   - List up to 5 timestamps—one per distinct individual. If there are 2 people in the video, list 2 timestamps (their clearest moment each). If 5 people, list 5. Do not duplicate the same person at multiple times; pick the single best frame for each person.
+   - Each entry: "timestamp" (seconds) and "description" (e.g. "Officer 1, clear front-facing face", "Driver, frontal face near camera").
 
 Respond with ONLY a JSON object in this exact shape. CRITICAL: You MUST analyze the video and set every "timestamp" to the actual second (0, 1, 2, ... to end of video) when that object or face appears. Do NOT use the placeholder value -1—replace all -1 values with real timestamps from the video.
 
@@ -831,20 +1111,25 @@ def parse_detect_response(text: str) -> dict:
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        start = raw.find("{")
-        if start >= 0:
-            depth = 0
-            for i in range(start, len(raw)):
-                if raw[i] == "{":
-                    depth += 1
-                elif raw[i] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        try:
-                            parsed = json.loads(raw[start : i + 1])
-                        except json.JSONDecodeError:
-                            pass
-                        break
+        outer = _extract_outermost_json_object(raw)
+        if outer:
+            try:
+                parsed = json.loads(outer)
+            except json.JSONDecodeError:
+                pass
+        if parsed is None:
+            repaired = _repair_truncated_json(raw)
+            if repaired:
+                try:
+                    parsed = json.loads(repaired)
+                    log.warning("[DETECT_PARSE] Recovered truncated JSON via repair")
+                except json.JSONDecodeError:
+                    repaired2 = _repair_json_string(repaired)
+                    try:
+                        parsed = json.loads(repaired2)
+                        log.warning("[DETECT_PARSE] Recovered truncated JSON via repair+fix")
+                    except json.JSONDecodeError:
+                        pass
 
     if not parsed or not isinstance(parsed, dict):
         # Fallback: try to find a JSON array (old objects-only format)

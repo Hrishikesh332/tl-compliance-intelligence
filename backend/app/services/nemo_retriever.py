@@ -1,13 +1,3 @@
-"""
-Self-contained NeMo Retriever document pipeline.
-
-Handles document extraction (via NeMo Retriever NIMs), embedding (via NVIDIA
-nv-embedqa-e5-v5), and storage/search in a dedicated S3-backed JSON index.
-
-This module is intentionally decoupled from the video pipeline -- it does NOT
-import bedrock_marengo, vector_store, or s3_store.
-"""
-
 import json
 import logging
 import os

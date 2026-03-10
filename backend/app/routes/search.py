@@ -1,4 +1,5 @@
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, jsonify, request
 
@@ -36,9 +37,9 @@ def _run_video_search(data: dict, flask_request) -> tuple[list[dict], str, str |
     if err or not query_emb:
         return [], display_query or "", err or "Could not get search embedding"
 
-    default_top_k = 12 if is_entity_search else 24
+    default_top_k = 8 if is_entity_search else 16
     top_k = data.get("top_k") or flask_request.args.get("top_k", type=int) or default_top_k
-    top_k = max(1, min(100, top_k))
+    top_k = max(1, min(50, top_k))
     clips_per_video = data.get("clips_per_video")
     if clips_per_video is None:
         clips_per_video = 1 if is_entity_search else 5
@@ -75,18 +76,26 @@ def _run_video_search(data: dict, flask_request) -> tuple[list[dict], str, str |
                 "output_uri": output_uri,
             })
         candidates.sort(key=lambda x: -x["score"])
-        max_verify = min(16, len(candidates))
-        for c in candidates[:max_verify]:
+        max_verify = min(8, len(candidates))
+
+        def _verify_candidate(cand: dict) -> None:
             try:
                 face_score, face_clips = face_match_score_in_video(
-                    query_emb, c["id"], c["output_uri"], max_frames=6
+                    query_emb, cand["id"], cand["output_uri"], max_frames=6
                 )
-                c["score"] = face_score
-                c["face_clips"] = face_clips if face_score >= 0.40 else []
+                cand["score"] = face_score
+                cand["face_clips"] = face_clips if face_score >= 0.40 else []
             except Exception as e:
-                log.warning("[SEARCH] Face verify failed for %s: %s", c["id"], e)
-                c["score"] = 0.0
-                c["face_clips"] = []
+                log.warning("[SEARCH] Face verify failed for %s: %s", cand.get("id"), e)
+                cand["score"] = 0.0
+                cand["face_clips"] = []
+
+        to_verify = candidates[:max_verify]
+        if to_verify:
+            with ThreadPoolExecutor(max_workers=min(4, max_verify)) as executor:
+                for cand in to_verify:
+                    executor.submit(_verify_candidate, cand)
+
         candidates[:max_verify] = sorted(
             candidates[:max_verify], key=lambda x: -x["score"]
         )
@@ -200,7 +209,7 @@ def api_search_hybrid():
     if text_query:
         try:
             from app.services.nemo_retriever import embed_query, search_docs
-            doc_top_k = max(1, min(20, int(data.get("doc_top_k", 10))))
+            doc_top_k = max(1, min(10, int(data.get("doc_top_k", 5))))
             query_emb = embed_query(text_query)
             doc_results = search_docs(query_emb, top_k=doc_top_k)
         except Exception as e:

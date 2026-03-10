@@ -3,6 +3,7 @@ import logging
 import random
 import subprocess
 import time as _time
+import math
 
 from flask import Blueprint, Response, jsonify, request
 
@@ -21,13 +22,16 @@ from app.utils.video_helpers import (
     extract_duration_and_thumbnail,
     make_tiny_thumbnail_b64,
     is_frame_blurred,
+    FACE_BLUR_VARIANCE_THRESHOLD,
     get_video_list_cache,
     set_video_list_cache,
     enqueue_bedrock_start,
     VIDEO_ANALYSIS_PROMPT,
+    VIDEO_ANALYSIS_SCHEMA,
     parse_video_analysis_response,
     normalize_video_analysis,
     TRANSCRIPT_PROMPT,
+    TRANSCRIPT_SCHEMA,
     parse_transcript_response,
     _timestamp_seconds_for_sort,
     DETECT_PROMPT,
@@ -37,6 +41,7 @@ from app.utils.video_helpers import (
     save_object_frame_to_disk,
     load_object_frame_from_disk,
     clips_above_threshold,
+    compute_duration_seconds_from_embeddings,
 )
 from app.services.bedrock_pegasus import analyze_video as pegasus_analyze_video
 
@@ -253,6 +258,43 @@ def api_list_videos():
     cache, cache_ts, ttl = get_video_list_cache()
     now = _time.monotonic()
     if cache and (now - cache_ts) < ttl:
+        # Cache can be primed at startup; opportunistically fix obviously-wrong durations
+        # even when serving from cache (best-effort, only for suspiciously small values).
+        fixed_any = False
+        for entry in cache.get("videos", []) if isinstance(cache, dict) else []:
+            if not isinstance(entry, dict):
+                continue
+            meta = entry.get("metadata") or {}
+            if meta.get("status") != "ready":
+                continue
+            existing = entry.get("duration_seconds", meta.get("duration_seconds"))
+            try:
+                existing_f = float(existing) if existing is not None else None
+            except (TypeError, ValueError):
+                existing_f = None
+            if existing_f is not None and math.isfinite(existing_f) and existing_f >= 60:
+                continue
+            output_uri = meta.get("output_s3_uri") or f"{S3_EMBEDDINGS_OUTPUT}/{entry.get('id')}"
+            emb_dur = compute_duration_seconds_from_embeddings(output_uri)
+            if emb_dur is None:
+                continue
+            should_update = (
+                existing_f is None
+                or (not math.isfinite(existing_f))
+                or emb_dur > (existing_f + 5.0)
+            )
+            if not should_update:
+                continue
+            meta["duration_seconds"] = emb_dur
+            entry["duration_seconds"] = emb_dur
+            for rec in vs_index():
+                if rec.get("id") == entry.get("id"):
+                    rec.setdefault("metadata", {})["duration_seconds"] = emb_dur
+                    break
+            fixed_any = True
+        if fixed_any:
+            vs_save()
+            set_video_list_cache(cache)
         return jsonify(cache)
 
     t0 = _time.perf_counter()
@@ -279,6 +321,48 @@ def api_list_videos():
 
     with ThreadPoolExecutor(max_workers=min(len(entries) or 1, 20)) as pool:
         list(pool.map(_resolve_urls, entries))
+
+    # Best-effort duration correction (some uploads have incorrect ffprobe duration).
+    # Only runs for "ready" videos and only if embeddings suggest a different duration.
+    fixed_any = False
+    for entry in entries:
+        meta = entry.get("metadata") or {}
+        if meta.get("status") != "ready":
+            continue
+        existing = meta.get("duration_seconds")
+        try:
+            existing_f = float(existing) if existing is not None else None
+        except (TypeError, ValueError):
+            existing_f = None
+
+        # Only attempt correction when duration is missing or suspiciously small.
+        if existing_f is not None and math.isfinite(existing_f) and existing_f >= 60:
+            continue
+
+        output_uri = meta.get("output_s3_uri") or f"{S3_EMBEDDINGS_OUTPUT}/{entry.get('id')}"
+        emb_dur = compute_duration_seconds_from_embeddings(output_uri)
+        if emb_dur is None:
+            continue
+
+        should_update = (
+            existing_f is None
+            or (not math.isfinite(existing_f))
+            or emb_dur > (existing_f + 5.0)
+        )
+        if not should_update:
+            continue
+
+        meta["duration_seconds"] = emb_dur
+        entry["duration_seconds"] = emb_dur
+        # Persist into vector store so the dashboard stays correct.
+        for rec in vs_index():
+            if rec.get("id") == entry.get("id"):
+                rec.setdefault("metadata", {})["duration_seconds"] = emb_dur
+                break
+        fixed_any = True
+
+    if fixed_any:
+        vs_save()
 
     result = {"indexId": FIXED_INDEX_ID, "count": len(entries), "videos": entries}
     set_video_list_cache(result)
@@ -325,7 +409,12 @@ def api_generate_video_analysis(video_id: str):
     try:
         log.info("[ANALYSIS] Calling Pegasus for video_id=%s s3_uri=%s", video_id, s3_uri)
         t0 = _time.perf_counter()
-        raw_text = pegasus_analyze_video(s3_uri, VIDEO_ANALYSIS_PROMPT)
+        raw_text = pegasus_analyze_video(
+            s3_uri,
+            VIDEO_ANALYSIS_PROMPT,
+            temperature=0,
+            response_schema=VIDEO_ANALYSIS_SCHEMA,
+        )
         log.info("[ANALYSIS] Pegasus response received in %.1fs (len=%d)", _time.perf_counter() - t0, len(raw_text or ""))
         log.info("[ANALYSIS] ── RAW PEGASUS RESPONSE START ──\n%s", raw_text)
         log.info("[ANALYSIS] ── RAW PEGASUS RESPONSE END ──")
@@ -412,7 +501,12 @@ def api_video_transcript(video_id: str):
     )
     try:
         t0 = _time.perf_counter()
-        raw = pegasus_analyze_video(s3_uri, TRANSCRIPT_PROMPT)
+        raw = pegasus_analyze_video(
+            s3_uri,
+            TRANSCRIPT_PROMPT,
+            temperature=0,
+            response_schema=TRANSCRIPT_SCHEMA,
+        )
         log.info("[TRANSCRIPT] Pegasus response received in %.1fs (%d chars)", _time.perf_counter() - t0, len(raw or ""))
         new_segments = parse_transcript_response(raw)
         if not new_segments:
@@ -578,6 +672,53 @@ def api_video_insights(video_id: str):
         )
         return jsonify({"video_id": video_id, "insights": insights})
 
+    # ── POST: generate or override insights ──
+    body = request.get_json(silent=True) or {}
+    mark_empty = bool(body.get("mark_empty"))
+    if mark_empty:
+        # Mark this video as analyzed-with-no-results so the frontend
+        # treats insights as present but shows no people/objects.
+        video_duration_sec = 0.0
+        try:
+            all_clips = load_video_embeddings_from_s3(output_uri)
+            clip_list = [c for c in all_clips if c.get("embeddingScope") == "clip"]
+            if clip_list:
+                video_duration_sec = max(c.get("endSec", 0) for c in clip_list)
+            log.info(
+                "[INSIGHTS] (empty) Video duration=%.1fs (%d clips)",
+                video_duration_sec,
+                len(clip_list),
+            )
+        except Exception as e:
+            log.warning("[INSIGHTS] Could not load clips for duration (mark_empty): %s", e)
+        if video_duration_sec <= 0:
+            try:
+                video_duration_sec = float(meta.get("duration_seconds") or 0.0)
+            except (TypeError, ValueError):
+                video_duration_sec = 0.0
+
+        empty_insights = {
+            "objects": [],
+            "detected_faces": [],
+            "people": [],
+            "mentioned": [],
+            "link_data_by_entity": {},
+            "keyframes": [],
+            "video_duration_sec": video_duration_sec,
+        }
+        idx = vs_index()
+        for rec in idx:
+            if rec.get("id") == video_id:
+                m = rec.setdefault("metadata", {})
+                m["video_insights"] = empty_insights
+                # Face presence is derived entirely from insights; clear so it can be recomputed later if needed.
+                m.pop("face_presence", None)
+                break
+        vs_save()
+        invalidate_video_cache()
+        log.info("[INSIGHTS] Marked empty insights for video_id=%s", video_id)
+        return jsonify({"video_id": video_id, "insights": empty_insights, "status": "empty"}), 200
+
     # ── POST: generate fresh insights ──
     if not s3_uri:
         log.warning("[INSIGHTS] No S3 URI for video_id=%s", video_id)
@@ -652,8 +793,10 @@ def api_video_insights(video_id: str):
             log.info("[INSIGHTS] Using fallback duration=%.1fs", video_duration_sec)
 
         # ────────────────────────────────────────────────────
-        # STEP 4 — Extract faces: Pegasus keyframes + uniform sampling across video
-        #          so we don't miss people who appear at times Pegasus didn't pick.
+        # STEP 4 — Extract faces.
+        #          Phase 1: Use Pegasus-provided face_keyframes (best per person).
+        #          Phase 2 (fallback): ONLY if Phase 1 finds no faces, use uniform
+        #          sampling across the video to catch missed people.
         #          ResNet10 SSD + Marengo embeddings, then deduplicate (same person
         #          at different orientations merges into one).
         # ────────────────────────────────────────────────────
@@ -667,82 +810,98 @@ def api_video_insights(video_id: str):
             ]
 
         keyframe_ts_set = {round(kf["timestamp"], 1) for kf in face_keyframes}
-        # Add uniform samples across the video so faces at non-keyframe times are not missed
-        # (more samples help catch a second person who appears at different times)
-        n_uniform = 22
-        step_sec = max(video_duration_sec / (n_uniform + 1), 2.0)
-        uniform_timestamps = [round(step_sec * (i + 1), 1) for i in range(n_uniform)]
-        # Only add uniform t if not already within 2.5s of a keyframe (avoid duplicate frames)
+        # Phase 1: only Pegasus keyframes
         face_sample_timestamps: list[tuple[float, str]] = [
             (round(kf["timestamp"], 1), kf.get("description", ""))
             for kf in face_keyframes
         ]
-        for t in uniform_timestamps:
-            if any(abs(t - kt) < 2.5 for kt in keyframe_ts_set):
-                continue
-            face_sample_timestamps.append((t, f"uniform sample t={t}s"))
-
-        log.info("[FACES] Using %d frames for face detection (keyframes + uniform):", len(face_sample_timestamps))
-        for t, desc in face_sample_timestamps[:10]:
-            log.info("  t=%.1fs — %s", t, desc)
-        if len(face_sample_timestamps) > 10:
-            log.info("  ... and %d more", len(face_sample_timestamps) - 10)
 
         all_face_detections: list[dict] = []
         keyframes_info: list[dict] = []
         # Slightly lower confidence (0.50) to catch more faces (e.g. partial profile)
         face_min_conf = 0.50
 
-        for t, desc in face_sample_timestamps:
-            log.info("[FACES] Extracting frame at t=%.1fs (%s)", t, desc)
-            frame_bytes = get_frame_bytes(video_id, t)
-            if not frame_bytes:
-                log.warning("[FACES] Could not extract frame at t=%.1f", t)
-                if t in keyframe_ts_set:
-                    keyframes_info.append({
-                        "timestamp": t, "description": desc,
-                        "status": "extraction_failed", "faces_detected": 0,
-                    })
-                continue
-            if is_frame_blurred(frame_bytes):
-                log.info("[FACES] Frame at t=%.1f is blurred, skipping", t)
-                if t in keyframe_ts_set:
-                    keyframes_info.append({
-                        "timestamp": t, "description": desc,
-                        "status": "blurred", "faces_detected": 0,
-                    })
-                continue
-
-            faces = detect_and_crop_faces(frame_bytes, output_size=256, min_confidence=face_min_conf)
-            log.info("[FACES] t=%.1fs -> %d faces detected (ResNet10 SSD)", t, len(faces))
-            for face in faces:
-                log.info(
-                    "[FACES]   confidence=%.4f bbox=(%d,%d %dx%d)",
-                    face["confidence"],
-                    face["bbox"]["x"], face["bbox"]["y"],
-                    face["bbox"]["w"], face["bbox"]["h"],
-                )
-
-            if t in keyframe_ts_set:
-                keyframes_info.append({
-                    "timestamp": t,
-                    "description": desc,
-                    "status": "ok",
-                    "faces_detected": len(faces),
-                    "frame_url": f"/api/videos/{video_id}/frame?t={t}",
-                })
-
-            for face in faces:
-                emb = embed_face_crop(face)
-                if emb is None:
+        def _detect_faces_at_times(timestamps: list[tuple[float, str]]):
+            for t, desc in timestamps:
+                log.info("[FACES] Extracting frame at t=%.1fs (%s)", t, desc)
+                frame_bytes = get_frame_bytes(video_id, t)
+                if not frame_bytes:
+                    log.warning("[FACES] Could not extract frame at t=%.1f", t)
+                    if t in keyframe_ts_set:
+                        keyframes_info.append({
+                            "timestamp": t, "description": desc,
+                            "status": "extraction_failed", "faces_detected": 0,
+                        })
                     continue
-                all_face_detections.append({
-                    "embedding": emb,
-                    "confidence": face["confidence"],
-                    "image_base64": face.get("image_base64", ""),
-                    "bbox": face.get("bbox"),
-                    "timestamp": t,
-                })
+                if is_frame_blurred(frame_bytes, threshold=FACE_BLUR_VARIANCE_THRESHOLD):
+                    log.info("[FACES] Frame at t=%.1f is blurred (thr=%s), skipping", t, FACE_BLUR_VARIANCE_THRESHOLD)
+                    if t in keyframe_ts_set:
+                        keyframes_info.append({
+                            "timestamp": t, "description": desc,
+                            "status": "blurred", "faces_detected": 0,
+                        })
+                    continue
+
+                faces = detect_and_crop_faces(frame_bytes, output_size=256, min_confidence=face_min_conf)
+                log.info("[FACES] t=%.1fs -> %d faces detected (ResNet10 SSD)", t, len(faces))
+                for face in faces:
+                    log.info(
+                        "[FACES]   confidence=%.4f bbox=(%d,%d %dx%d)",
+                        face["confidence"],
+                        face["bbox"]["x"], face["bbox"]["y"],
+                        face["bbox"]["w"], face["bbox"]["h"],
+                    )
+
+                if t in keyframe_ts_set:
+                    keyframes_info.append({
+                        "timestamp": t,
+                        "description": desc,
+                        "status": "ok",
+                        "faces_detected": len(faces),
+                        "frame_url": f"/api/videos/{video_id}/frame?t={t}",
+                    })
+
+                for face in faces:
+                    emb = embed_face_crop(face)
+                    if emb is None:
+                        continue
+                    all_face_detections.append({
+                        "embedding": emb,
+                        "confidence": face["confidence"],
+                        "image_base64": face.get("image_base64", ""),
+                        "bbox": face.get("bbox"),
+                        "timestamp": t,
+                    })
+
+        log.info("[FACES] Phase 1 — using %d Pegasus keyframe(s) for face detection", len(face_sample_timestamps))
+        for t, desc in face_sample_timestamps[:10]:
+            log.info("  t=%.1fs — %s", t, desc)
+        if len(face_sample_timestamps) > 10:
+            log.info("  ... and %d more", len(face_sample_timestamps) - 10)
+
+        _detect_faces_at_times(face_sample_timestamps)
+
+        # Phase 2 fallback: only if Pegasus keyframes did not yield any faces.
+        if not all_face_detections:
+            log.info("[FACES] No faces found from Pegasus keyframes; falling back to uniform sampling across video")
+            n_uniform = 22
+            step_sec = max(video_duration_sec / (n_uniform + 1), 2.0)
+            uniform_timestamps = [round(step_sec * (i + 1), 1) for i in range(n_uniform)]
+            fallback_samples: list[tuple[float, str]] = []
+            for t in uniform_timestamps:
+                # skip times that are too close to existing keyframes to avoid duplicate frames
+                if any(abs(t - kt) < 2.5 for kt in keyframe_ts_set):
+                    continue
+                fallback_samples.append((t, f"uniform sample t={t}s"))
+
+            log.info("[FACES] Phase 2 — using %d uniform timestamp(s) for face detection", len(fallback_samples))
+            for t, desc in fallback_samples[:10]:
+                log.info("  t=%.1fs — %s", t, desc)
+            if len(fallback_samples) > 10:
+                log.info("  ... and %d more", len(fallback_samples) - 10)
+
+            _detect_faces_at_times(fallback_samples)
+            face_sample_timestamps.extend(fallback_samples)
 
         log.info("[FACES] Total raw face detections across %d frames: %d", len(face_sample_timestamps), len(all_face_detections))
 

@@ -69,10 +69,17 @@ def _get_account_id() -> str:
     return sts.get_caller_identity()["Account"]
 
 
-def analyze_video(s3_uri: str, prompt: str, bucket_owner: str | None = None) -> str:
+def analyze_video(
+    s3_uri: str,
+    prompt: str,
+    bucket_owner: str | None = None,
+    *,
+    temperature: float | None = None,
+    response_schema: dict | None = None,
+) -> str:
     client = _bedrock_client()
     owner = bucket_owner or _get_account_id()
-    body = {
+    body: dict = {
         "inputPrompt": prompt[:4000],
         "mediaSource": {
             "s3Location": {
@@ -81,6 +88,10 @@ def analyze_video(s3_uri: str, prompt: str, bucket_owner: str | None = None) -> 
             }
         },
     }
+    if temperature is not None:
+        body["temperature"] = temperature
+    if response_schema is not None:
+        body["responseFormat"] = {"jsonSchema": response_schema}
     payload = json.dumps(body)
     model_id = _inference_profile_id()
 

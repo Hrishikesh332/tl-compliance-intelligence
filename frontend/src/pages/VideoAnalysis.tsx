@@ -1242,6 +1242,13 @@ export default function VideoAnalysis() {
   })()
   const cachedVideo = videoId ? getVideo(videoId) : undefined
   const videoTitle = cachedVideo?.metadata?.filename || videoId || ''
+  const videoMeta = (cachedVideo?.metadata || {}) as Record<string, unknown>
+  const hasAudio =
+    videoMeta.hasOwnProperty('has_audio')
+      ? videoMeta.has_audio !== false
+      : videoMeta.hasOwnProperty('audio')
+        ? videoMeta.audio !== false
+        : true
 
   const rawAnalysis = cachedVideo?.metadata?.video_analysis as Record<string, unknown> | undefined
   const videoAnalysis: VideoAnalysisData = rawAnalysis && typeof rawAnalysis === 'object' && rawAnalysis.title
@@ -1448,6 +1455,32 @@ export default function VideoAnalysis() {
     return () => { aborted = true }
   }, [videoId, detectedFaces.length, insights])
 
+  // Auto-append transcript when the initial analysis returned only a short "starter transcript".
+  // This keeps UX smooth by kicking off transcript completion via the dedicated endpoint.
+  const autoAppendRef = useRef<{ videoId: string; attempted: boolean }>({ videoId: '', attempted: false })
+  useEffect(() => {
+    if (!videoId) return
+    if (autoAppendRef.current.videoId !== videoId) {
+      autoAppendRef.current = { videoId, attempted: false }
+    }
+    if (autoAppendRef.current.attempted) return
+    if (appendTranscriptLoading || generatingAnalysis) return
+
+    const segments = videoAnalysis.transcript
+    if (!segments || segments.length === 0) return
+
+    // If analysis produced only a small number of segments, assume it's a starter transcript.
+    const STARTER_SEGMENT_THRESHOLD = 18
+    if (segments.length >= STARTER_SEGMENT_THRESHOLD) return
+
+    const last = segments[segments.length - 1]
+    const lastSec = last ? parseTimestampToSeconds(last.time) : NaN
+    if (!Number.isFinite(lastSec) || lastSec < 0) return
+
+    autoAppendRef.current.attempted = true
+    appendTranscriptFrom(lastSec)
+  }, [videoId, videoAnalysis.transcript.length, appendTranscriptLoading, generatingAnalysis])
+
   async function generateInsights() {
     if (!videoId) return
     if (!mountedRef.current) return
@@ -1474,6 +1507,9 @@ export default function VideoAnalysis() {
       if (mountedRef.current) setGeneratingInsights(false)
     }
   }
+
+  const shouldShowPeopleSection =
+    !insights || insightsLoading || generatingInsights || (peopleCount + mentionedNames.length) > 0
 
   /** Single entry point: run content analysis then people/objects insights; updates analysisStep for UI */
   async function runFullAnalysis() {
@@ -1896,11 +1932,18 @@ export default function VideoAnalysis() {
             </>
           )}
 
+          {shouldShowPeopleSection && (
           <Section
             title="People"
             badge={peopleCount + mentionedNames.length}
             color="bg-accent"
           >
+            {generatingInsights && (
+              <div className="mb-3 rounded-lg border border-border bg-surface px-3 py-2 flex items-center gap-2">
+                <span className="w-4 h-4 border-2 border-accent/30 border-t-accent rounded-full animate-spin" aria-hidden />
+                <p className="text-sm text-text-secondary">Loading people and detected objects…</p>
+              </div>
+            )}
             {insightsLoading && !insights ? (
               <p className="text-sm text-gray-500">Loading insights…</p>
             ) : !insights && !generatingInsights ? (
@@ -1929,14 +1972,16 @@ export default function VideoAnalysis() {
                   <p className="text-xs text-gray-500">
                     {hasDetectedFaces ? `Detected faces (${detectedFaces.length})` : `Shown people (${people.length})`}
                   </p>
-                  <button
-                    type="button"
-                    onClick={generateInsights}
-                    disabled={generatingInsights}
-                    className="text-xs font-medium text-accent hover:underline disabled:opacity-60"
-                  >
-                    {generatingInsights ? 'Regenerating…' : 'Regenerate insights'}
-                  </button>
+                  {isCheckPath && (
+                    <button
+                      type="button"
+                      onClick={generateInsights}
+                      disabled={generatingInsights}
+                      className="text-xs font-medium text-accent hover:underline disabled:opacity-60"
+                    >
+                      {generatingInsights ? 'Loading…' : 'Regenerate insights'}
+                    </button>
+                  )}
                 </div>
 
                 {hasDetectedFaces ? (
@@ -2104,12 +2149,19 @@ export default function VideoAnalysis() {
               </>
             )}
           </Section>
+          )}
 
           <Section
             title="Detected objects"
             badge={objectsList.length}
             color="bg-accent"
           >
+            {generatingInsights && (
+              <div className="mb-3 rounded-lg border border-border bg-surface px-3 py-2 flex items-center gap-2">
+                <span className="w-4 h-4 border-2 border-accent/30 border-t-accent rounded-full animate-spin" aria-hidden />
+                <p className="text-sm text-text-secondary">Loading detected objects…</p>
+              </div>
+            )}
             {!insights ? (
               <p className="text-sm text-gray-500">Generate insights to see detected objects with timestamps and frames.</p>
             ) : (
@@ -2443,6 +2495,33 @@ export default function VideoAnalysis() {
                 const incomplete = segments.length > 0 && videoDurationSec > 0 && Number.isFinite(lastSec) && lastSec < videoDurationSec - 30
                 return (
                   <>
+                    {segments.length === 0 && hasAudio && (
+                      <li className="border-t border-gray-100 px-3 sm:px-4 py-3 flex flex-col items-stretch gap-2 list-none">
+                        {appendTranscriptError && (
+                          <p className="text-sm text-error text-center w-full" role="alert">{appendTranscriptError}</p>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => appendTranscriptFrom(0)}
+                          disabled={appendTranscriptLoading || generatingAnalysis}
+                          className="inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-accent hover:bg-accent/5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed w-full sm:w-auto self-center"
+                        >
+                          {appendTranscriptLoading ? (
+                            <>
+                              <img src={spinnerIconUrl} alt="" className="w-4 h-4 animate-spin shrink-0" aria-hidden />
+                              Generating…
+                            </>
+                          ) : (
+                            <>
+                              <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                              </svg>
+                              Generate transcript
+                            </>
+                          )}
+                        </button>
+                      </li>
+                    )}
                     {visible.map((line, i) => {
                       const seekSeconds = parseTimestampToSeconds(line.time)
                       const handleSeek = () => {
