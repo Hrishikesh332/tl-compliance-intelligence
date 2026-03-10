@@ -1455,30 +1455,14 @@ export default function VideoAnalysis() {
     return () => { aborted = true }
   }, [videoId, detectedFaces.length, insights])
 
-  // Auto-append transcript when the initial analysis returned only a short "starter transcript".
-  // This keeps UX smooth by kicking off transcript completion via the dedicated endpoint.
-  const autoAppendRef = useRef<{ videoId: string; attempted: boolean }>({ videoId: '', attempted: false })
+  // NOTE: Auto-append transcript on mount has been disabled.
+  // Previously, this effect would POST /transcript automatically whenever
+  // there was a short "starter" transcript in video_analysis. That caused
+  // transcript generation to fire on simple refreshes or when clicking
+  // unrelated actions like "Generate insights". Now transcript generation
+  // only runs when the user explicitly clicks the transcript buttons.
   useEffect(() => {
-    if (!videoId) return
-    if (autoAppendRef.current.videoId !== videoId) {
-      autoAppendRef.current = { videoId, attempted: false }
-    }
-    if (autoAppendRef.current.attempted) return
-    if (appendTranscriptLoading || generatingAnalysis) return
-
-    const segments = videoAnalysis.transcript
-    if (!segments || segments.length === 0) return
-
-    // If analysis produced only a small number of segments, assume it's a starter transcript.
-    const STARTER_SEGMENT_THRESHOLD = 18
-    if (segments.length >= STARTER_SEGMENT_THRESHOLD) return
-
-    const last = segments[segments.length - 1]
-    const lastSec = last ? parseTimestampToSeconds(last.time) : NaN
-    if (!Number.isFinite(lastSec) || lastSec < 0) return
-
-    autoAppendRef.current.attempted = true
-    appendTranscriptFrom(lastSec)
+    // Intentionally left blank – no automatic transcript calls.
   }, [videoId, videoAnalysis.transcript.length, appendTranscriptLoading, generatingAnalysis])
 
   async function generateInsights() {

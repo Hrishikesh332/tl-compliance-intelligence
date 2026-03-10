@@ -3,7 +3,13 @@ import logging
 from flask import Blueprint, jsonify, request
 
 from app.services.bedrock_marengo import embed_image, media_source_base64
-from app.services.vector_store import FIXED_INDEX_ID, add as index_add, list_entries as index_list, get_entry as index_get_entry
+from app.services.vector_store import (
+    FIXED_INDEX_ID,
+    add as index_add,
+    list_entries as index_list,
+    get_entry as index_get_entry,
+    delete as index_delete,
+)
 
 from app.utils.faces import detect_and_crop_faces, ENTITY_FACE_MIN_CONFIDENCE
 
@@ -31,6 +37,18 @@ def api_list_entities():
         })
     log.info("[ENTITIES] Listed %d entities (from %d raw records)", len(entities), len(raw))
     return jsonify({"indexId": FIXED_INDEX_ID, "count": len(entities), "entities": entities})
+
+
+@entities_bp.route("/entities/<entity_id>", methods=["DELETE"])
+def api_delete_entity(entity_id: str):
+    if not entity_id:
+        return jsonify({"error": "Missing entity_id"}), 400
+    ok = index_delete(entity_id)
+    if not ok:
+        log.info("[ENTITIES] Delete requested for missing entity id=%s", entity_id)
+        return jsonify({"error": "Entity not found"}), 404
+    log.info("[ENTITIES] Entity deleted id=%s", entity_id)
+    return jsonify({"ok": True, "id": entity_id}), 200
 
 
 @entities_bp.route("/entities/from-image", methods=["POST"])
