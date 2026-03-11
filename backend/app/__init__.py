@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+import threading
 from pathlib import Path
 
 from flask import Flask, g, request
@@ -68,7 +69,9 @@ def create_app():
     app.register_blueprint(index_bp, url_prefix="/api/index")
     app.register_blueprint(documents_bp, url_prefix="/api/documents")
 
-    _warmup_video_list(app)
+    warmup_enabled = os.environ.get("WARMUP_ON_STARTUP", "true").strip().lower() in ("1", "true", "yes", "on")
+    if warmup_enabled:
+        threading.Thread(target=_warmup_video_list, args=(app,), daemon=True).start()
 
     return app
 
