@@ -18,6 +18,20 @@ type DocResult = {
   text: string
 }
 
+type GroupedDocResult = {
+  key: string
+  docId: string
+  filename: string
+  ext: string
+  bestScore: number
+  chunks: Array<{
+    id: string
+    chunkIndex: number
+    text: string
+    scorePercent: number
+  }>
+}
+
 type SearchAttachment = {
   id: string
   type: 'image' | 'entity'
@@ -565,16 +579,18 @@ function DocResultCard({ ext, filename, chunkIndex, text, scorePercent, docId }:
       {/* Header bar */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border/60 bg-card/40">
         {/* File type icon */}
-        <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-brand-charcoal shrink-0">
+        <div className="w-9 h-9 rounded-lg bg-red-50 flex items-center justify-center shrink-0">
           {isPdf ? (
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="text-white">
-              <path d="M6 2h9l5 5v15a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
-              <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
-              <path d="M8 13h2.5a1.25 1.25 0 100-2.5H8v5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M13 10.5h1.5a1.75 1.75 0 110 3.5H13v-3.5z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden className="text-red-600">
+              <rect x="4" y="3" width="14" height="18" rx="2" fill="currentColor" />
+              <path d="M14 3v5h5" fill="none" stroke="white" strokeWidth="1.4" strokeLinejoin="round" />
+              <path d="M6.5 15.5H9a1.4 1.4 0 0 0 0-2.8H6.5v5.3" fill="none" stroke="white" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M11 12.7h1.8a1.9 1.9 0 1 1 0 3.8H11v-3.8Z" fill="none" stroke="white" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M16 12.7h2v5.1" fill="none" stroke="white" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M15 17.8h3.5" fill="none" stroke="white" strokeWidth="1.3" strokeLinecap="round" />
             </svg>
           ) : (
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="text-white">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="text-red-600">
               <path d="M6 2h9l5 5v15a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
               <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
               <path d="M8 13h8M8 17h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
@@ -664,6 +680,120 @@ function DocResultCard({ ext, filename, chunkIndex, text, scorePercent, docId }:
   )
 }
 
+function GroupedDocResultCard({ group }: { group: GroupedDocResult }) {
+  const [expanded, setExpanded] = useState(true)
+
+  return (
+    <div className="group rounded-xl border border-border bg-surface hover:border-gray-400 transition-all duration-200 overflow-hidden">
+      {/* Header bar */}
+      <button
+        type="button"
+        onClick={() => setExpanded((prev) => !prev)}
+        className="w-full flex items-center gap-3 px-4 py-3 border-b border-border/60 bg-card/40 text-left"
+      >
+        {/* File type icon */}
+        <div className="w-9 h-9 rounded-lg bg-red-50 flex items-center justify-center shrink-0">
+          {group.ext === 'PDF' ? (
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden className="text-red-600">
+              <rect x="4" y="3" width="14" height="18" rx="2" fill="currentColor" />
+              <path d="M14 3v5h5" fill="none" stroke="white" strokeWidth="1.4" strokeLinejoin="round" />
+              <path d="M6.5 15.5H9a1.4 1.4 0 0 0 0-2.8H6.5v5.3" fill="none" stroke="white" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M11 12.7h1.8a1.9 1.9 0 1 1 0 3.8H11v-3.8Z" fill="none" stroke="white" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M16 12.7h2v5.1" fill="none" stroke="white" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M15 17.8h3.5" fill="none" stroke="white" strokeWidth="1.3" strokeLinecap="round" />
+            </svg>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="text-red-600">
+              <path d="M6 2h9l5 5v15a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+              <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+              <path d="M8 13h8M8 17h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+            </svg>
+          )}
+        </div>
+
+        {/* Title + meta */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-text-primary truncate">{group.filename}</span>
+            <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-brand-charcoal/10 text-text-tertiary">
+              {group.ext}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-text-tertiary mt-0.5">
+            <span>
+              {group.chunks.length} chunk{group.chunks.length !== 1 ? 's' : ''} · pages{' '}
+              {group.chunks
+                .map((c) => c.chunkIndex + 1)
+                .sort((a, b) => a - b)
+                .join(', ')}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full bg-brand-charcoal/5 px-2 py-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-brand-charcoal" aria-hidden />
+              <span className="font-medium">
+                Top match: {Math.round(group.bestScore * 100)}%
+              </span>
+            </span>
+          </div>
+        </div>
+
+        <svg
+          className={`w-4 h-4 text-text-tertiary shrink-0 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
+          viewBox="0 0 16 16"
+          fill="currentColor"
+          aria-hidden
+        >
+          <path d="M6 3.5L10.5 8 6 12.5V3.5Z" />
+        </svg>
+      </button>
+
+      {/* Body: list of chunks */}
+      {expanded && (
+        <div className="px-4 py-3 space-y-3 max-h-64 overflow-y-auto">
+          {group.chunks.map((chunk) => (
+            <div key={chunk.id} className="rounded-lg border border-border/60 bg-card/40 px-3 py-2.5">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="text-xs font-semibold text-text-primary">
+                  Page {chunk.chunkIndex + 1}
+                </span>
+                <span className="text-[11px] font-semibold text-text-secondary">
+                  {chunk.scorePercent}%
+                </span>
+              </div>
+              <p className="text-[13px] leading-relaxed text-text-secondary whitespace-pre-wrap break-words line-clamp-4">
+                {chunk.text}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Action bar */}
+      <div className="flex items-center gap-2 px-4 py-2.5 border-t border-border/60 bg-card/30">
+        <a
+          href={`${API_BASE}/api/documents/file/${group.docId}/${encodeURIComponent(group.filename)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold border border-border text-text-primary hover:bg-card transition-colors"
+          title="Open source document"
+          onClick={(e) => {
+            if (group.ext === 'PDF') {
+              e.preventDefault()
+              window.open(`${API_BASE}/api/documents/file/${group.docId}/${encodeURIComponent(group.filename)}`, '_blank')
+            }
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+            <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M15 3h6v6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M10 14L21 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          Open document
+        </a>
+      </div>
+    </div>
+  )
+}
+
 /* ------------------------------------------------------------------ */
 /*  Dashboard                                                          */
 /* ------------------------------------------------------------------ */
@@ -683,6 +813,42 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
   const [videosPage, setVideosPage] = useState(1)
   const [tabularPage, setTabularPage] = useState(1)
   const [activeRelevanceFilter, setActiveRelevanceFilter] = useState<RelevanceLevel | null>(null)
+  const groupedDocResults: GroupedDocResult[] = useMemo(() => {
+    if (!docResults) return []
+    const map = new Map<string, GroupedDocResult>()
+    for (const doc of docResults) {
+      const key = `${doc.doc_id}::${doc.filename}`
+      const ext = doc.filename.split('.').pop()?.toUpperCase() || 'DOC'
+      const scorePercent = Math.round(doc.score * 100)
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          docId: doc.doc_id,
+          filename: doc.filename,
+          ext,
+          bestScore: doc.score,
+          chunks: [],
+        })
+      }
+      const entry = map.get(key)!
+      if (doc.score > entry.bestScore) {
+        entry.bestScore = doc.score
+      }
+      entry.chunks.push({
+        id: doc.id,
+        chunkIndex: doc.chunk_index,
+        text: doc.text,
+        scorePercent,
+      })
+    }
+    const groups = Array.from(map.values())
+    groups.forEach((g) => {
+      // Order chunks by relevance (top match first), not by page
+      g.chunks.sort((a, b) => b.scorePercent - a.scorePercent)
+    })
+    groups.sort((a, b) => b.bestScore - a.bestScore)
+    return groups
+  }, [docResults])
   const VIDEOS_PAGE_SIZE = 7
   const TABULAR_PAGE_SIZE = 8
   const { videos: cachedVideos } = useVideoCache()
@@ -796,6 +962,7 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
   const [searchError, setSearchError] = useState<string | null>(null)
   const [entitiesList, setEntitiesList] = useState<EntityOption[]>([])
   const entityDropdownRef = useRef<HTMLDivElement>(null)
+  const docsSectionRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -814,6 +981,20 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
       .catch(() => { if (!cancelled) setEntitiesList([]) })
     return () => { cancelled = true }
   }, [])
+
+  // Collapse documents section once user scrolls down toward the videos area
+  useEffect(() => {
+    function handleScroll() {
+      if (!docsExpanded || !docsSectionRef.current) return
+      const rect = docsSectionRef.current.getBoundingClientRect()
+      // When top of docs section has scrolled well above the viewport, collapse it
+      if (rect.bottom < 80) {
+        setDocsExpanded(false)
+      }
+    }
+    window.addEventListener('scroll', handleScroll, { passive: true })
+    return () => window.removeEventListener('scroll', handleScroll)
+  }, [docsExpanded])
 
   const { entityMentionQuery, entityDropdownVisible, filteredEntities, queryBeforeMention } = useMemo(() => {
     const lastAt = searchQuery.lastIndexOf('@')
@@ -1497,8 +1678,12 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
       </div>
 
       {/* ─── Document results (NeMo Retriever) ─── */}
-      {docResults && docResults.length > 0 && (
-        <div className="mb-8">
+      {groupedDocResults && groupedDocResults.length > 0 && (
+        <div
+          className="mb-8"
+          id="dashboard-documents-section"
+          ref={docsSectionRef}
+        >
           <button
             type="button"
             onClick={() => setDocsExpanded((prev) => !prev)}
@@ -1520,27 +1705,15 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                 Documents
               </h3>
               <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-brand-charcoal text-white">
-                {docResults.length}
+                {groupedDocResults.length}
               </span>
             </div>
           </button>
           {docsExpanded && (
-            <div className="grid gap-4">
-              {docResults.map((doc) => {
-                const ext = doc.filename.split('.').pop()?.toUpperCase() || 'DOC'
-                const scorePercent = Math.round(doc.score * 100)
-                return (
-                  <DocResultCard
-                    key={doc.id}
-                    ext={ext}
-                    filename={doc.filename}
-                    chunkIndex={doc.chunk_index}
-                    text={doc.text}
-                    scorePercent={scorePercent}
-                    docId={doc.doc_id}
-                  />
-                )
-              })}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {groupedDocResults.map((group) => (
+                <GroupedDocResultCard key={group.key} group={group} />
+              ))}
             </div>
           )}
         </div>

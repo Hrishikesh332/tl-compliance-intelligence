@@ -838,8 +838,8 @@ function PdfReportModal({
     const transcriptLineColor = [220, 218, 216] as const
     // Tighter line height for transcript so each segment height reflects its line count (9pt ~3.2mm + small gap)
     const transcriptLineHeight = 4.5
-    const transcriptGapAboveLine = 5
-    const transcriptGapBelowLine = 2.5
+    const transcriptGapAboveLine = 2.5
+    const transcriptGapBelowLine = 5
     if (transcript?.length) {
       doc.setFontSize(9)
       doc.setTextColor(80, 80, 80)
