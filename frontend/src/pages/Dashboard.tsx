@@ -579,23 +579,23 @@ function DocResultCard({ ext, filename, chunkIndex, text, scorePercent, docId }:
       {/* Header bar */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border/60 bg-card/40">
         {/* File type icon */}
-        <div className="w-9 h-9 rounded-lg bg-red-50 flex items-center justify-center shrink-0">
-          {isPdf ? (
-            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden className="text-red-600">
-              <rect x="4" y="3" width="14" height="18" rx="2" fill="currentColor" />
-              <path d="M14 3v5h5" fill="none" stroke="white" strokeWidth="1.4" strokeLinejoin="round" />
-              <path d="M6.5 15.5H9a1.4 1.4 0 0 0 0-2.8H6.5v5.3" fill="none" stroke="white" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M11 12.7h1.8a1.9 1.9 0 1 1 0 3.8H11v-3.8Z" fill="none" stroke="white" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M16 12.7h2v5.1" fill="none" stroke="white" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M15 17.8h3.5" fill="none" stroke="white" strokeWidth="1.3" strokeLinecap="round" />
-            </svg>
-          ) : (
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="text-red-600">
-              <path d="M6 2h9l5 5v15a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
-              <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
-              <path d="M8 13h8M8 17h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
-            </svg>
-          )}
+        <div className="w-9 h-9 rounded-lg bg-red-50 flex items-center justify-center mb-3">
+          <svg
+            viewBox="0 0 12 12"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            className="w-4 h-4"
+            aria-hidden="true"
+          >
+            <g fill="currentColor" fillRule="evenodd" clipRule="evenodd">
+              <path d="M7.09961 9C7.59667 9 8 9.40333 8 9.90039V11.0996C8 11.5967 7.59667 12 7.09961 12H0.900391C0.403334 12 0 11.5967 0 11.0996V9.90039C0 9.40333 0.403334 9 0.900391 9H7.09961Z" />
+              <path d="M11.0996 9C11.5967 9 12 9.40333 12 9.90039V11.0996C12 11.5967 11.5967 12 11.0996 12H9.90039C9.40333 12 9 11.5967 9 11.0996V9.90039C9 9.40333 9.40333 9 9.90039 9H11.0996ZM10 11H11V10H10V11Z" />
+              <path d="M4.09961 4.5C4.59667 4.5 5 4.90333 5 5.40039V6.59961C5 7.09667 4.59667 7.5 4.09961 7.5H0.900391C0.403334 7.5 0 7.09667 0 6.59961V5.40039C0 4.90333 0.403334 4.5 0.900391 4.5H4.09961ZM1 6.5H4V5.5H1V6.5Z" />
+              <path d="M11.0996 4.5C11.5967 4.5 12 4.90333 12 5.40039V6.59961C12 7.09667 11.5967 7.5 11.0996 7.5H6.90039C6.40333 7.5 6 7.09667 6 6.59961V5.40039C6 4.90333 6.40333 4.5 6.90039 4.5H11.0996Z" />
+              <path d="M7.09961 0C7.59667 0 8 0.403334 8 0.900391V2.09961C8 2.59667 7.59667 3 7.09961 3H0.900391C0.403334 3 0 2.59667 0 2.09961V0.900391C0 0.403334 0.403334 0 0.900391 0H7.09961Z" />
+              <path d="M11.0996 0C11.5967 0 12 0.403334 12 0.900391V2.09961C12 2.59667 11.5967 3 11.0996 3H9.90039C9.40333 3 9 2.59667 9 2.09961V0.900391C9 0.403334 9.40333 0 9.90039 0H11.0996ZM10 2H11V1H10V2Z" />
+            </g>
+          </svg>
         </div>
 
         {/* Title + meta */}
@@ -659,7 +659,7 @@ function DocResultCard({ ext, filename, chunkIndex, text, scorePercent, docId }:
           href={`${API_BASE}/api/documents/file/${docId}/${encodeURIComponent(filename)}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold border border-border text-text-primary hover:bg-card transition-colors"
+          className="inline-flex items-center gap-1.5 h-9 px-4 rounded-xl text-sm font-semibold bg-brand-charcoal text-white hover:bg-gray-600 transition-colors"
           title="Open source document"
           onClick={(e) => {
             if (isPdf) {
@@ -668,10 +668,10 @@ function DocResultCard({ ext, filename, chunkIndex, text, scorePercent, docId }:
             }
           }}
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-            <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-            <path d="M15 3h6v6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-            <path d="M10 14L21 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" />
+            <path d="M15 3h6v6" />
+            <path d="M10 14L21 3" />
           </svg>
           View Source
         </a>
@@ -692,23 +692,23 @@ function GroupedDocResultCard({ group }: { group: GroupedDocResult }) {
         className="w-full flex items-center gap-3 px-4 py-3 border-b border-border/60 bg-card/40 text-left"
       >
         {/* File type icon */}
-        <div className="w-9 h-9 rounded-lg bg-red-50 flex items-center justify-center shrink-0">
-          {group.ext === 'PDF' ? (
-            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden className="text-red-600">
-              <rect x="4" y="3" width="14" height="18" rx="2" fill="currentColor" />
-              <path d="M14 3v5h5" fill="none" stroke="white" strokeWidth="1.4" strokeLinejoin="round" />
-              <path d="M6.5 15.5H9a1.4 1.4 0 0 0 0-2.8H6.5v5.3" fill="none" stroke="white" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M11 12.7h1.8a1.9 1.9 0 1 1 0 3.8H11v-3.8Z" fill="none" stroke="white" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M16 12.7h2v5.1" fill="none" stroke="white" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M15 17.8h3.5" fill="none" stroke="white" strokeWidth="1.3" strokeLinecap="round" />
-            </svg>
-          ) : (
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="text-red-600">
-              <path d="M6 2h9l5 5v15a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
-              <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
-              <path d="M8 13h8M8 17h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
-            </svg>
-          )}
+        <div className="w-9 h-9 rounded-lg bg-red-50 flex items-center justify-center mb-3">
+          <svg
+            viewBox="0 0 12 12"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            className="w-4 h-4"
+            aria-hidden="true"
+          >
+            <g fill="currentColor" fillRule="evenodd" clipRule="evenodd">
+              <path d="M7.09961 9C7.59667 9 8 9.40333 8 9.90039V11.0996C8 11.5967 7.59667 12 7.09961 12H0.900391C0.403334 12 0 11.5967 0 11.0996V9.90039C0 9.40333 0.403334 9 0.900391 9H7.09961Z" />
+              <path d="M11.0996 9C11.5967 9 12 9.40333 12 9.90039V11.0996C12 11.5967 11.5967 12 11.0996 12H9.90039C9.40333 12 9 11.5967 9 11.0996V9.90039C9 9.40333 9.40333 9 9.90039 9H11.0996ZM10 11H11V10H10V11Z" />
+              <path d="M4.09961 4.5C4.59667 4.5 5 4.90333 5 5.40039V6.59961C5 7.09667 4.59667 7.5 4.09961 7.5H0.900391C0.403334 7.5 0 7.09667 0 6.59961V5.40039C0 4.90333 0.403334 4.5 0.900391 4.5H4.09961ZM1 6.5H4V5.5H1V6.5Z" />
+              <path d="M11.0996 4.5C11.5967 4.5 12 4.90333 12 5.40039V6.59961C12 7.09667 11.5967 7.5 11.0996 7.5H6.90039C6.40333 7.5 6 7.09667 6 6.59961V5.40039C6 4.90333 6.40333 4.5 6.90039 4.5H11.0996Z" />
+              <path d="M7.09961 0C7.59667 0 8 0.403334 8 0.900391V2.09961C8 2.59667 7.59667 3 7.09961 3H0.900391C0.403334 3 0 2.59667 0 2.09961V0.900391C0 0.403334 0.403334 0 0.900391 0H7.09961Z" />
+              <path d="M11.0996 0C11.5967 0 12 0.403334 12 0.900391V2.09961C12 2.59667 11.5967 3 11.0996 3H9.90039C9.40333 3 9 2.59667 9 2.09961V0.900391C9 0.403334 9.40333 0 9.90039 0H11.0996ZM10 2H11V1H10V2Z" />
+            </g>
+          </svg>
         </div>
 
         {/* Title + meta */}
@@ -773,7 +773,7 @@ function GroupedDocResultCard({ group }: { group: GroupedDocResult }) {
           href={`${API_BASE}/api/documents/file/${group.docId}/${encodeURIComponent(group.filename)}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold border border-border text-text-primary hover:bg-card transition-colors"
+          className="inline-flex items-center gap-1.5 h-9 px-4 rounded-xl text-sm font-semibold bg-brand-charcoal text-white hover:bg-gray-600 transition-colors"
           title="Open source document"
           onClick={(e) => {
             if (group.ext === 'PDF') {
@@ -782,10 +782,10 @@ function GroupedDocResultCard({ group }: { group: GroupedDocResult }) {
             }
           }}
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-            <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-            <path d="M15 3h6v6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-            <path d="M10 14L21 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" />
+            <path d="M15 3h6v6" />
+            <path d="M10 14L21 3" />
           </svg>
           Open document
         </a>
@@ -1146,7 +1146,8 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
     const body: Record<string, unknown> = {
       top_k: (hasEntities || hasImage) ? 12 : 18,
       clips_per_video: (hasEntities || hasImage) ? 2 : 3,
-      doc_top_k: 10,
+      // When searching with image/entity, do not request document results
+      doc_top_k: (hasEntities || hasImage) ? 0 : 10,
     }
     if (hasQuery) body.query = query
     if (hasEntities) body.entity_ids = entityIds
@@ -1232,7 +1233,8 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
       const displayQuery = data.query ?? (hasQuery ? query : (hasEntities ? `Entity: ${searchAttachments.filter((a) => a.type === 'entity').map((a) => a.name).join(', ')}` : query))
       setSearchResults({ query: displayQuery, results: videoItems })
 
-      if (Array.isArray(data.documents) && data.documents.length > 0) {
+      // Only show / persist document results when not using image/entity search
+      if (!hasEntities && !hasImage && Array.isArray(data.documents) && data.documents.length > 0) {
         setDocResults(data.documents)
       }
 
@@ -1248,7 +1250,9 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
           }
           return { id: att.id, type: att.type, name: att.name, previewUrl: att.previewUrl }
         })
-        const persistedDocs = Array.isArray(data.documents) && data.documents.length > 0 ? data.documents : docResults
+        const persistedDocs = (!hasEntities && !hasImage && Array.isArray(data.documents) && data.documents.length > 0)
+          ? data.documents
+          : docResults
         sessionStorage.setItem('vc_last_search', JSON.stringify({ query: displayQuery, results: videoItems, attachments: persistedAttachments, documents: persistedDocs }))
       } catch { /* ignore */ }
     } catch (e) {
@@ -1696,11 +1700,24 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
               <path d="M6 3.5L10.5 8 6 12.5V3.5Z" />
             </svg>
             <div className="flex items-center gap-2">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="text-text-secondary">
-                <path d="M6 2h9l5 5v15a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
-                <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
-                <path d="M8 13h8M8 17h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
-              </svg>
+              <div className="w-9 h-9 shrink-0 rounded-lg bg-red-50 flex items-center justify-center">
+                <svg
+                  viewBox="0 0 12 12"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="w-4 h-4"
+                  aria-hidden="true"
+                >
+                  <g fill="currentColor" fillRule="evenodd" clipRule="evenodd">
+                    <path d="M7.09961 9C7.59667 9 8 9.40333 8 9.90039V11.0996C8 11.5967 7.59667 12 7.09961 12H0.900391C0.403334 12 0 11.5967 0 11.0996V9.90039C0 9.40333 0.403334 9 0.900391 9H7.09961Z" />
+                    <path d="M11.0996 9C11.5967 9 12 9.40333 12 9.90039V11.0996C12 11.5967 11.5967 12 11.0996 12H9.90039C9.40333 12 9 11.5967 9 11.0996V9.90039C9 9.40333 9.40333 9 9.90039 9H11.0996ZM10 11H11V10H10V11Z" />
+                    <path d="M4.09961 4.5C4.59667 4.5 5 4.90333 5 5.40039V6.59961C5 7.09667 4.59667 7.5 4.09961 7.5H0.900391C0.403334 7.5 0 7.09667 0 6.59961V5.40039C0 4.90333 0.403334 4.5 0.900391 4.5H4.09961ZM1 6.5H4V5.5H1V6.5Z" />
+                    <path d="M11.0996 4.5C11.5967 4.5 12 4.90333 12 5.40039V6.59961C12 7.09667 11.5967 7.5 11.0996 7.5H6.90039C6.40333 7.5 6 7.09667 6 6.59961V5.40039C6 4.90333 6.40333 4.5 6.90039 4.5H11.0996Z" />
+                    <path d="M7.09961 0C7.59667 0 8 0.403334 8 0.900391V2.09961C8 2.59667 7.59667 3 7.09961 3H0.900391C0.403334 3 0 2.59667 0 2.09961V0.900391C0 0.403334 0.403334 0 0.900391 0H7.09961Z" />
+                    <path d="M11.0996 0C11.5967 0 12 0.403334 12 0.900391V2.09961C12 2.59667 11.5967 3 11.0996 3H9.90039C9.40333 3 9 2.59667 9 2.09961V0.900391C9 0.403334 9.40333 0 9.90039 0H11.0996ZM10 2H11V1H10V2Z" />
+                  </g>
+                </svg>
+              </div>
               <h3 className="text-sm font-semibold text-text-primary group-hover:text-accent transition-colors">
                 Documents
               </h3>

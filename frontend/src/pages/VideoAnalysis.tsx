@@ -2324,13 +2324,13 @@ export default function VideoAnalysis() {
                     </div>
                     {rel.label && (
                       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold shrink-0 border ${
-                        rel.label === 'Highest' ? 'bg-emerald-500/15 text-emerald-700 border-emerald-200' :
+                        rel.label === 'Highest' ? 'bg-black text-white border-black' :
                         rel.label === 'High' ? 'bg-green-500/15 text-green-700 border-green-200' :
                         rel.label === 'Medium' ? 'bg-amber-500/15 text-amber-700 border-amber-200' :
                         'bg-red-500/15 text-red-700 border-red-200'
                       }`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${
-                          rel.label === 'Highest' ? 'bg-emerald-500' :
+                          rel.label === 'Highest' ? 'bg-white' :
                           rel.label === 'High' ? 'bg-green-500' :
                           rel.label === 'Medium' ? 'bg-amber-500' : 'bg-red-500'
                         }`} />
@@ -2340,6 +2340,14 @@ export default function VideoAnalysis() {
                   </div>
                 </div>
 
+                {/* Preload first few thumbnails so they appear faster */}
+                {videoId && (
+                  <div className="hidden" aria-hidden>
+                    {searchClips.slice(0, 5).map((clip, i) => (
+                      <img key={`preload-${i}`} alt="" src={`${API_BASE}/api/videos/${encodeURIComponent(videoId)}/frame?t=${clip.start}&w=112`} fetchPriority="high" />
+                    ))}
+                  </div>
+                )}
                 {/* Clip results — Strand card list: border-border, hover:bg-card, active accent */}
                 <div className="divide-y divide-border bg-background max-h-[280px] overflow-y-auto">
                   {searchClips.map((clip, i) => {
@@ -2366,10 +2374,10 @@ export default function VideoAnalysis() {
                         }`}>
                           {videoId ? (
                             <img
-                              src={`${API_BASE}/api/videos/${encodeURIComponent(videoId)}/frame?t=${clip.start}`}
+                              src={`${API_BASE}/api/videos/${encodeURIComponent(videoId)}/frame?t=${clip.start}&w=112`}
                               alt=""
                               className="w-full h-full object-cover"
-                              loading="lazy"
+                              loading={i < 5 ? 'eager' : 'lazy'}
                               onError={(e) => {
                                 const el = e.currentTarget
                                 el.style.display = 'none'

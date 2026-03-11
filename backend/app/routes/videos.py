@@ -547,22 +547,31 @@ def api_video_frame(video_id: str):
     t = request.args.get("t", type=float)
     if t is None or t < 0:
         return jsonify({"error": "Query parameter 't' (seconds) is required and must be >= 0"}), 400
+    w = request.args.get("w", type=int)
+    if w is not None and (w < 1 or w > 2000):
+        w = None
     url = video_id_to_presigned_url(video_id)
     if not url:
         return jsonify({"error": "Video not found or no stream URL", "video_id": video_id}), 404
     try:
+        cmd = [
+            "ffmpeg", "-y", "-loglevel", "error", "-ss", str(t),
+            "-i", url, "-vframes", "1",
+        ]
+        if w:
+            cmd.extend(["-vf", f"scale={w}:-2", "-q:v", "4"])
+        cmd.extend(["-f", "image2", "pipe:1"])
         result = subprocess.run(
-            [
-                "ffmpeg", "-y", "-loglevel", "error", "-ss", str(t),
-                "-i", url, "-vframes", "1", "-f", "image2", "pipe:1",
-            ],
+            cmd,
             capture_output=True,
             timeout=30,
             check=False,
         )
         if result.returncode != 0 or not result.stdout:
             return jsonify({"error": "Frame extraction failed (ffmpeg error or unsupported URL)"}), 503
-        return Response(result.stdout, mimetype="image/jpeg")
+        resp = Response(result.stdout, mimetype="image/jpeg")
+        resp.headers["Cache-Control"] = "public, max-age=3600"
+        return resp
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Frame extraction timed out"}), 504
     except FileNotFoundError:
