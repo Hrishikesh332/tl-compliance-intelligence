@@ -21,11 +21,13 @@ def main():
     from dotenv import load_dotenv
     load_dotenv()
 
-    bodycam_dir = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else DEFAULT_BODYCAM_DIR
-    if not bodycam_dir.is_dir():
-        print("Bodycam folder not found:", bodycam_dir)
-        print("Create it and add video files, or pass a path: python index_bodycam.py /path/to/bodycam")
+    video_dir = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else DEFAULT_BODYCAM_DIR
+    if not video_dir.is_dir():
+        print("Video folder not found:", video_dir)
+        print("Create it and add video files, or pass a path: python index_bodycam.py /path/to/videos")
         sys.exit(1)
+
+    source_tag = (video_dir.name or "video").lower()
 
     from app.services.s3_store import upload_video, S3_EMBEDDINGS_OUTPUT
     from app.services.bedrock_marengo import start_video_embedding, get_async_invocation, load_video_embeddings_from_s3
@@ -40,11 +42,11 @@ def main():
     }
 
     videos = sorted(
-        p for p in bodycam_dir.iterdir()
+        p for p in video_dir.iterdir()
         if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS
     )
     if not videos:
-        print("No video files found in", bodycam_dir)
+        print("No video files found in", video_dir)
         print("Supported extensions:", ", ".join(VIDEO_EXTENSIONS))
         sys.exit(0)
 
@@ -52,7 +54,7 @@ def main():
     def _p(*args):
         print(*args, flush=True)
 
-    _p("Found", len(videos), "video(s) in", bodycam_dir)
+    _p("Found", len(videos), "video(s) in", video_dir)
     queued = []
     for path in videos:
         size = path.stat().st_size
@@ -96,7 +98,7 @@ def main():
                     "s3_key": info["s3_key"],
                     "uploaded_at": info["uploaded_at"],
                     "status": "indexing",
-                    "tags": ["bodycam"],
+                    "tags": [source_tag],
                     "invocation_arn": invocation_arn,
                     "output_s3_uri": output_uri,
                 },

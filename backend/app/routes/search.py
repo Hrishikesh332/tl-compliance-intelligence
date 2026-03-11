@@ -1,5 +1,4 @@
 import logging
-from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, jsonify, request
 
@@ -12,7 +11,6 @@ from app.utils.video_helpers import (
     best_clip_score_and_count,
     clips_above_threshold,
     entity_ranking_score,
-    face_match_score_in_video,
     ENTITY_CLIP_MIN_SCORE,
 )
 
@@ -23,14 +21,17 @@ search_bp = Blueprint("search", __name__)
 
 # ---------------------------------------------------------------------------
 #  Shared video-search helper (used by /videos and /hybrid)
+#  Entity search = search VIDEOS by entity: similarity only (Marengo embeddings),
+#  no ResNet / no face detection at search time.
 # ---------------------------------------------------------------------------
 
 
 def _run_video_search(data: dict, flask_request) -> tuple[list[dict], str, str | None]:
     """Run the full video search pipeline and return (results, display_query, error).
 
-    ``results`` is a list of dicts ready for JSON serialisation (id, score,
-    metadata, stream_url, clips).  ``error`` is a string on failure, else None.
+    Entity search (when entity_id(s) are provided): search VIDEOS only. Uses
+    precomputed Marengo embeddings: entity embedding vs video clip embeddings
+    (cosine similarity). No ResNet, no face detection, no frame extraction.
     """
     query_emb, display_query, is_entity_search, err = get_search_embedding_from_request(data, flask_request)
     log.info("[SEARCH] type=%s query=%r", "entity" if is_entity_search else "text", display_query or "(none)")
@@ -48,6 +49,7 @@ def _run_video_search(data: dict, flask_request) -> tuple[list[dict], str, str |
     clip_min_score = ENTITY_CLIP_MIN_SCORE if is_entity_search else None
 
     if is_entity_search:
+        # Video-only: rank by similarity (entity emb vs precomputed clip embs). No ResNet.
         all_videos = index_list(type_filter="video")
         candidates = []
         for rec in all_videos:
@@ -76,29 +78,6 @@ def _run_video_search(data: dict, flask_request) -> tuple[list[dict], str, str |
                 "output_uri": output_uri,
             })
         candidates.sort(key=lambda x: -x["score"])
-        max_verify = min(8, len(candidates))
-
-        def _verify_candidate(cand: dict) -> None:
-            try:
-                face_score, face_clips = face_match_score_in_video(
-                    query_emb, cand["id"], cand["output_uri"], max_frames=6
-                )
-                cand["score"] = face_score
-                cand["face_clips"] = face_clips if face_score >= 0.40 else []
-            except Exception as e:
-                log.warning("[SEARCH] Face verify failed for %s: %s", cand.get("id"), e)
-                cand["score"] = 0.0
-                cand["face_clips"] = []
-
-        to_verify = candidates[:max_verify]
-        if to_verify:
-            with ThreadPoolExecutor(max_workers=min(4, max_verify)) as executor:
-                for cand in to_verify:
-                    executor.submit(_verify_candidate, cand)
-
-        candidates[:max_verify] = sorted(
-            candidates[:max_verify], key=lambda x: -x["score"]
-        )
         results = candidates[:top_k]
     else:
         results = index_search(
@@ -120,21 +99,18 @@ def _run_video_search(data: dict, flask_request) -> tuple[list[dict], str, str |
                 pass
         clips = []
         if is_entity_search:
-            if r.get("face_clips"):
-                clips = r["face_clips"][:clips_per_video]
-            else:
-                output_uri = meta.get("output_s3_uri") or (f"{S3_EMBEDDINGS_OUTPUT}/{r['id']}" if r.get("id") else None)
-                if output_uri and meta.get("status") == "ready":
-                    try:
-                        clips = clips_above_threshold(
-                            query_emb,
-                            output_uri,
-                            min_score=ENTITY_CLIP_MIN_SCORE,
-                            visual_only=True,
-                            max_clips=clips_per_video,
-                        )
-                    except Exception:
-                        pass
+            output_uri = meta.get("output_s3_uri") or (f"{S3_EMBEDDINGS_OUTPUT}/{r['id']}" if r.get("id") else None)
+            if output_uri and meta.get("status") == "ready":
+                try:
+                    clips = clips_above_threshold(
+                        query_emb,
+                        output_uri,
+                        min_score=ENTITY_CLIP_MIN_SCORE,
+                        visual_only=True,
+                        max_clips=clips_per_video,
+                    )
+                except Exception:
+                    pass
         if not clips:
             output_uri = meta.get("output_s3_uri") or (f"{S3_EMBEDDINGS_OUTPUT}/{r['id']}" if r.get("id") else None)
             if output_uri and meta.get("status") == "ready":
