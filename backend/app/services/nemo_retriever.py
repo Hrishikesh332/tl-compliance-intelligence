@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -27,6 +28,12 @@ ALLOWED_EXTENSIONS = {
 }
 
 MAX_DOC_SIZE = 50 * 1024 * 1024  # 50 MB
+
+CHUNK_MAX_CHARS = 1200
+CHUNK_OVERLAP_CHARS = 150
+TRANSCRIPT_SEGS_PER_CHUNK = 5
+TRANSCRIPT_SEG_OVERLAP = 1
+EMBED_MAX_CHARS = 1200
 
 # ---------------------------------------------------------------------------
 # In-memory document index with S3 persistence
@@ -102,6 +109,28 @@ def _save_doc_index() -> None:
         _doc_index_ts = time.monotonic()
 
 
+def delete_doc(doc_id: str) -> int:
+    """Remove all chunks for a document from the index. Returns count removed."""
+    _load_doc_index()
+    before = len(_doc_index)
+    _doc_index[:] = [r for r in _doc_index if r.get("doc_id") != doc_id]
+    removed = before - len(_doc_index)
+    if removed > 0:
+        _save_doc_index()
+        log.info("Deleted %d chunk(s) for doc %s", removed, doc_id)
+    return removed
+
+
+def clear_doc_index() -> int:
+    """Delete the entire document index (all documents). Returns count removed."""
+    _load_doc_index()
+    removed = len(_doc_index)
+    _doc_index.clear()
+    _save_doc_index()
+    log.info("Cleared document index: removed %d chunk(s)", removed)
+    return removed
+
+
 # Eagerly load on import so the index is ready
 _load_doc_index()
 
@@ -126,6 +155,48 @@ def upload_document(file_bytes: bytes, filename: str) -> dict:
         log.info("Saved document %s locally at %s", doc_id, local_dir / f"{doc_id}{ext}")
 
     return {"doc_id": doc_id, "s3_key": key, "filename": filename}
+
+
+def _store_pdf(file_path: str, doc_id: str) -> dict:
+    """Persist the PDF to S3 (or local data dir) and return location info."""
+    ext = os.path.splitext(file_path)[1] or ".pdf"
+    key = f"{S3_DOC_PREFIX}/{doc_id}{ext}"
+    file_bytes = Path(file_path).read_bytes()
+
+    if _use_s3():
+        _s3().put_object(Bucket=S3_BUCKET, Key=key, Body=file_bytes)
+        log.info("Stored PDF %s to s3://%s/%s", doc_id, S3_BUCKET, key)
+        return {"pdf_s3_key": key, "pdf_s3_uri": f"s3://{S3_BUCKET}/{key}"}
+
+    local_dir = _BACKEND_DIR / "data" / S3_DOC_PREFIX
+    local_dir.mkdir(parents=True, exist_ok=True)
+    dest = local_dir / f"{doc_id}{ext}"
+    dest.write_bytes(file_bytes)
+    log.info("Stored PDF %s locally at %s", doc_id, dest)
+    return {"pdf_local_path": str(dest)}
+
+
+def _match_video_for_doc(filename: str) -> dict | None:
+    """Find a video in the index whose filename closely matches the document name."""
+    from app.services.vector_store import list_entries as vs_list
+
+    doc_base = os.path.splitext(filename)[0].strip().lower()
+    if not doc_base:
+        return None
+
+    for v in vs_list(type_filter="video"):
+        meta = v.get("metadata", {})
+        vid_name = meta.get("filename", "")
+        vid_base = os.path.splitext(vid_name)[0].strip().lower()
+        if not vid_base:
+            continue
+        if doc_base == vid_base or doc_base in vid_base or vid_base in doc_base:
+            return {
+                "video_id": v["id"],
+                "video_filename": vid_name,
+                "video_s3_key": meta.get("s3_key", ""),
+            }
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +304,206 @@ def extract_document(file_path: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Smart PDF extraction + semantic chunking
+# ---------------------------------------------------------------------------
+
+_REPORT_NOISE = [
+    re.compile(r"^--\s*\d+\s+of\s+\d+\s*--$"),
+    re.compile(r"^TwelveLabs\s*·.*Page\s+\d+\s+of\s+\d+"),
+    re.compile(r"^TwelveLabs$"),
+    re.compile(r"^REPORT$"),
+    re.compile(r"^Compliance Intelligence Report\b"),
+]
+
+_SECTION_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"(?i)^Executive\s+summary"), "executive_summary"),
+    (re.compile(r"(?i)^Description$"), "description"),
+    (re.compile(r"(?i)^Categories$"), "categories"),
+    (re.compile(r"(?i)^Topics$"), "topics"),
+    (re.compile(r"(?i)^Risk\s+assessment"), "risk_assessment"),
+    (re.compile(r"(?i)^Key\s+findings"), "risk_assessment"),
+    (re.compile(r"(?i)^Detected\s+faces"), "detected_faces"),
+    (re.compile(r"(?i)^Detected\s+objects"), "detected_objects"),
+    (re.compile(r"(?i)^Transcript"), "transcript"),
+    (re.compile(r"(?i)^Level:\s"), "risk_assessment"),
+]
+
+_TS_LINE = re.compile(r"^\d{1,2}:\d{2}\b")
+
+
+def _extract_pdf_text(file_path: str) -> str:
+    """Extract full text from a PDF using the best available library."""
+    errors: list[str] = []
+    extractors = [
+        ("PyMuPDF", _extract_fitz),
+        ("pdfplumber", _extract_pdfplumber),
+        ("PyPDF2", _extract_pypdf2),
+    ]
+    for lib_name, func in extractors:
+        try:
+            text = func(file_path)
+            if text and text.strip():
+                log.info("PDF extracted with %s (%d chars)", lib_name, len(text))
+                return text
+        except ImportError:
+            errors.append(f"{lib_name} not installed")
+        except Exception as exc:
+            errors.append(f"{lib_name}: {exc}")
+    raise RuntimeError(f"No PDF library could extract text: {'; '.join(errors)}")
+
+
+def _extract_fitz(path: str) -> str:
+    import fitz
+    doc = fitz.open(path)
+    pages = [page.get_text() for page in doc]
+    doc.close()
+    return "\n\n".join(pages)
+
+
+def _extract_pdfplumber(path: str) -> str:
+    import pdfplumber
+    with pdfplumber.open(path) as pdf:
+        return "\n\n".join(p.extract_text() or "" for p in pdf.pages)
+
+
+def _extract_pypdf2(path: str) -> str:
+    from PyPDF2 import PdfReader
+    reader = PdfReader(path)
+    return "\n\n".join(p.extract_text() or "" for p in reader.pages)
+
+
+def _clean_lines(lines: list[str]) -> list[str]:
+    """Remove report boilerplate headers / footers / page markers."""
+    return [ln for ln in lines if not any(p.match(ln.strip()) for p in _REPORT_NOISE)]
+
+
+def _detect_section(line: str) -> str | None:
+    stripped = line.strip()
+    for pattern, name in _SECTION_PATTERNS:
+        if pattern.match(stripped):
+            return name
+    return None
+
+
+def _parse_sections(text: str) -> list[tuple[str, str]]:
+    """Split cleaned text into (section_name, section_text) pairs,
+    merging adjacent tiny sections that belong together."""
+    lines = _clean_lines(text.split("\n"))
+    raw_sections: list[tuple[str, list[str]]] = []
+    cur_name = "overview"
+    cur_lines: list[str] = []
+
+    for line in lines:
+        sec = _detect_section(line.strip())
+        if sec:
+            if cur_lines:
+                raw_sections.append((cur_name, cur_lines))
+            cur_name = sec
+            cur_lines = [line]
+        else:
+            cur_lines.append(line)
+    if cur_lines:
+        raw_sections.append((cur_name, cur_lines))
+
+    merged: list[tuple[str, str]] = []
+    for name, lns in raw_sections:
+        block = "\n".join(lns).strip()
+        if not block:
+            continue
+        if merged and name == merged[-1][0]:
+            merged[-1] = (name, merged[-1][1] + "\n" + block)
+        elif merged and len(merged[-1][1]) < 120 and "transcript" not in name:
+            merged[-1] = (merged[-1][0] + "/" + name, merged[-1][1] + "\n" + block)
+        else:
+            merged.append((name, block))
+    return merged
+
+
+def _chunk_transcript(text: str) -> list[str]:
+    """Split a transcript section into overlapping windows of segments."""
+    lines = text.split("\n")
+    segments: list[str] = []
+    buf: list[str] = []
+    for line in lines:
+        if _TS_LINE.match(line.strip()) and buf:
+            segments.append("\n".join(buf).strip())
+            buf = [line]
+        else:
+            buf.append(line)
+    if buf:
+        joined = "\n".join(buf).strip()
+        if joined:
+            segments.append(joined)
+
+    if segments and not _TS_LINE.match(segments[0].split("\n")[0].strip()):
+        header = segments.pop(0)
+        if segments:
+            segments[0] = header + "\n" + segments[0]
+
+    if not segments:
+        return [text.strip()] if text.strip() else []
+
+    chunks: list[str] = []
+    step = max(1, TRANSCRIPT_SEGS_PER_CHUNK - TRANSCRIPT_SEG_OVERLAP)
+    i = 0
+    while i < len(segments):
+        end = min(i + TRANSCRIPT_SEGS_PER_CHUNK, len(segments))
+        chunks.append("\n".join(segments[i:end]))
+        i += step
+    return chunks
+
+
+def _chunk_with_overlap(
+    text: str,
+    max_chars: int = CHUNK_MAX_CHARS,
+    overlap: int = CHUNK_OVERLAP_CHARS,
+) -> list[str]:
+    """Split text at paragraph / sentence boundaries with overlap."""
+    if len(text) <= max_chars:
+        return [text]
+    chunks: list[str] = []
+    start = 0
+    while start < len(text):
+        end = min(start + max_chars, len(text))
+        if end < len(text):
+            brk = text.rfind("\n\n", start + max_chars // 2, end)
+            if brk <= start:
+                brk = text.rfind(". ", start + max_chars // 2, end)
+                if brk > start:
+                    brk += 1
+            if brk > start:
+                end = brk
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        start = max(start + 1, end - overlap)
+    return chunks
+
+
+def _split_into_semantic_chunks(file_path: str) -> list[tuple[str, str]]:
+    """Extract text from a PDF and return (section, text) chunk pairs."""
+    raw = _extract_pdf_text(file_path)
+    sections = _parse_sections(raw)
+
+    result: list[tuple[str, str]] = []
+    for section_name, section_text in sections:
+        if "transcript" in section_name:
+            for chunk in _chunk_transcript(section_text):
+                result.append((section_name, chunk))
+        elif len(section_text) > CHUNK_MAX_CHARS:
+            for chunk in _chunk_with_overlap(section_text):
+                result.append((section_name, chunk))
+        else:
+            result.append((section_name, section_text))
+
+    if not result:
+        for chunk in _chunk_with_overlap(raw):
+            result.append(("content", chunk))
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # NVIDIA embedding (nv-embedqa-e5-v5 via build.nvidia.com — NOT Marengo)
 # ---------------------------------------------------------------------------
 
@@ -270,10 +541,11 @@ def _embed_via_requests(texts: list[str], input_type: str) -> list[list[float]]:
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    """Embed a batch of passage texts using NVIDIA nv-embedqa-e5-v5."""
+    """Embed a batch of passage texts using NVIDIA nv-embedqa-e5-v5.
+    Truncates to EMBED_MAX_CHARS to stay within the model's 512-token limit."""
     if not NVIDIA_API_KEY:
         raise RuntimeError("NVIDIA_API_KEY is not set — cannot embed documents")
-    truncated = [t[:2048] for t in texts]
+    truncated = [t[:EMBED_MAX_CHARS] for t in texts]
     return _embed_via_requests(truncated, "passage")
 
 
@@ -281,7 +553,7 @@ def embed_query(query: str) -> list[float]:
     """Embed a single search query."""
     if not NVIDIA_API_KEY:
         raise RuntimeError("NVIDIA_API_KEY is not set — cannot embed documents")
-    return _embed_via_requests([query[:2048]], "query")[0]
+    return _embed_via_requests([query[:EMBED_MAX_CHARS]], "query")[0]
 
 
 # ---------------------------------------------------------------------------
@@ -294,22 +566,27 @@ def add_chunks(
     filename: str,
     chunks: list[str],
     embeddings: list[list[float]],
+    sections: list[str] | None = None,
+    extra_metadata: dict | None = None,
 ) -> int:
     """Add extracted & embedded document chunks to the index and persist."""
     _load_doc_index()
 
     added = 0
     for i, (text, emb) in enumerate(zip(chunks, embeddings)):
-        _doc_index.append(
-            {
-                "id": f"{doc_id}_chunk_{i}",
-                "doc_id": doc_id,
-                "filename": filename,
-                "chunk_index": i,
-                "text": text[:5000],
-                "embedding": emb,
-            }
-        )
+        rec: dict = {
+            "id": f"{doc_id}_chunk_{i}",
+            "doc_id": doc_id,
+            "filename": filename,
+            "chunk_index": i,
+            "text": text[:5000],
+            "embedding": emb,
+        }
+        if sections and i < len(sections):
+            rec["section"] = sections[i]
+        if extra_metadata:
+            rec.update(extra_metadata)
+        _doc_index.append(rec)
         added += 1
 
     _save_doc_index()
@@ -336,16 +613,9 @@ def search_docs(query_embedding: list[float], top_k: int = 10) -> list[dict]:
         if dn > 0:
             dv = dv / dn
         score = float(np.dot(qv, dv))
-        scored.append(
-            {
-                "id": rec["id"],
-                "score": round(score, 6),
-                "doc_id": rec["doc_id"],
-                "filename": rec["filename"],
-                "chunk_index": rec["chunk_index"],
-                "text": rec["text"],
-            }
-        )
+        result = {k: v for k, v in rec.items() if k != "embedding"}
+        result["score"] = round(score, 6)
+        scored.append(result)
 
     scored.sort(key=lambda x: -x["score"])
     return scored[:top_k]
@@ -371,14 +641,59 @@ def list_docs() -> list[dict]:
 
 def ingest_document(file_path: str, doc_id: str, filename: str) -> dict:
     """
-    Full ingestion: NeMo extraction -> NVIDIA embedding -> S3 index storage.
+    Full ingestion:
+      1. Persist the PDF to S3 / local storage
+      2. Match a video by filename and link it
+      3. Smart section-aware chunking (NeMo fallback for non-PDFs)
+      4. NVIDIA embedding
+      5. Store chunks with full metadata (PDF link + video link)
     """
-    chunks = extract_document(file_path)
+    # -- 1. Persist the source PDF so it's retrievable later --
+    extra: dict = {}
+    try:
+        pdf_info = _store_pdf(file_path, doc_id)
+        extra.update(pdf_info)
+    except Exception as exc:
+        log.warning("Could not persist PDF for %s: %s", doc_id, exc)
+
+    # -- 2. Try to match a video in the index by name --
+    try:
+        video_match = _match_video_for_doc(filename)
+        if video_match:
+            extra.update(video_match)
+            log.info("Linked doc %s to video %s (%s)", doc_id, video_match["video_id"], video_match["video_filename"])
+        else:
+            log.info("No matching video found for doc %s", doc_id)
+    except Exception as exc:
+        log.warning("Video matching failed for %s: %s", doc_id, exc)
+
+    # -- 3. Extract + chunk --
+    ext = os.path.splitext(file_path)[1].lower()
+    chunks: list[str] = []
+    sections: list[str] = []
+
+    if ext == ".pdf":
+        try:
+            pairs = _split_into_semantic_chunks(file_path)
+            sections = [s for s, _ in pairs]
+            chunks = [t for _, t in pairs]
+            log.info("Smart PDF chunking produced %d chunks from %s", len(chunks), filename)
+        except Exception as exc:
+            log.warning("Smart PDF extraction failed for %s, falling back to NeMo: %s", filename, exc)
+
+    if not chunks:
+        chunks = extract_document(file_path)
+
     if not chunks:
         log.warning("No content extracted from %s", filename)
         return {"doc_id": doc_id, "chunks": 0, "status": "empty"}
 
-    embeddings = embed_texts([c[:2048] for c in chunks])
-    add_chunks(doc_id, filename, chunks, embeddings)
+    # -- 4. Embed + store with metadata --
+    embeddings = embed_texts(chunks)
+    add_chunks(
+        doc_id, filename, chunks, embeddings,
+        sections=sections or None,
+        extra_metadata=extra or None,
+    )
 
     return {"doc_id": doc_id, "chunks": len(chunks), "status": "ready"}

@@ -34,6 +34,9 @@ video_compliance_v1.zip
 new-videos/
 bodycam/
 
+# Documents (local PDFs, etc.)
+documents/
+
 # Video files (anywhere in repo)
 *.mp4
 *.webm
