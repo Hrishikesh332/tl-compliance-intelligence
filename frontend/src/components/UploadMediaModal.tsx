@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 
 import { API_BASE } from '../config'
+import { useVideoCache } from '../contexts/VideoCache'
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.avi', '.webm', '.mkv'])
 const DOC_EXTENSIONS = new Set([
@@ -56,6 +56,14 @@ function IconUpload({ className = 'w-5 h-5' }: { className?: string }) {
 }
 
 type FileWithType = { file: File; type: MediaType }
+type UploadStatus =
+  | 'pending'
+  | 'uploading'
+  | 'queued'
+  | 'processing'
+  | 'indexing'
+  | 'done'
+  | 'error'
 
 interface UploadMediaModalProps {
   open: boolean
@@ -64,13 +72,16 @@ interface UploadMediaModalProps {
 
 export default function UploadMediaModal({ open, onClose }: UploadMediaModalProps) {
   const inputRef = useRef<HTMLInputElement>(null)
-  const navigate = useNavigate()
+  const { refresh } = useVideoCache()
   const [files, setFiles] = useState<FileWithType[]>([])
   const [uploading, setUploading] = useState(false)
-  const [progress, setProgress] = useState<Record<string, 'pending' | 'uploading' | 'processing' | 'done' | 'error'>>({})
+  const [progress, setProgress] = useState<Record<string, UploadStatus>>({})
   const [error, setError] = useState<string | null>(null)
+  const [backgroundPanelVisible, setBackgroundPanelVisible] = useState(false)
 
-  if (!open) return null
+  const showBackgroundPanel = backgroundPanelVisible && Object.keys(progress).length > 0
+
+  if (!open && !showBackgroundPanel) return null
 
   function handleFiles(selected: FileList | null) {
     if (!selected) return
@@ -107,13 +118,16 @@ export default function UploadMediaModal({ open, onClose }: UploadMediaModalProp
     if (!files.length) return
     setUploading(true)
     setError(null)
-    const newProgress: Record<string, 'pending' | 'uploading' | 'processing' | 'done' | 'error'> = {}
+    setBackgroundPanelVisible(true)
+    const newProgress: Record<string, UploadStatus> = {}
     files.forEach(({ file }) => { newProgress[file.name] = 'pending' })
     setProgress({ ...newProgress })
+    onClose()
 
     const INTER_VIDEO_DELAY_MS = 500
     const MAX_RETRIES = 3
     const BASE_RETRY_DELAY_MS = 3000
+    const videoTasks: Array<{ fileName: string; taskId: string }> = []
 
     async function uploadWithRetry(file: File, type: MediaType): Promise<void> {
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -136,6 +150,12 @@ export default function UploadMediaModal({ open, onClose }: UploadMediaModalProp
             }
             throw new Error(errMsg)
           }
+          const data = await resp.json().catch(() => ({}))
+          if (data.task_id) {
+            videoTasks.push({ fileName: file.name, taskId: data.task_id })
+          }
+          newProgress[file.name] = 'queued'
+          setProgress({ ...newProgress })
           return
         } else {
           formData.append('document', file)
@@ -146,7 +166,53 @@ export default function UploadMediaModal({ open, onClose }: UploadMediaModalProp
             const data = await resp.json().catch(() => ({}))
             throw new Error(data.error || `HTTP ${resp.status}`)
           }
+          newProgress[file.name] = 'done'
+          setProgress({ ...newProgress })
           return
+        }
+      }
+    }
+
+    async function pollVideoTasksUntilComplete() {
+      if (!videoTasks.length) return
+      const pendingTasks = new Map(videoTasks.map((task) => [task.taskId, task.fileName]))
+      while (pendingTasks.size > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 4000))
+        const checks = await Promise.all(
+          Array.from(pendingTasks.entries()).map(async ([taskId, fileName]) => {
+            try {
+              const resp = await fetch(`${API_BASE}/api/videos/tasks/${taskId}`)
+              const data = await resp.json().catch(() => ({}))
+              if (!resp.ok) {
+                throw new Error(data.error || `HTTP ${resp.status}`)
+              }
+              return { taskId, fileName, status: String(data.status || '').toLowerCase() }
+            } catch {
+              return { taskId, fileName, status: 'error' }
+            }
+          }),
+        )
+
+        let hasStatusChange = false
+        for (const check of checks) {
+          const nextStatus: UploadStatus =
+            check.status === 'ready'
+              ? 'done'
+              : check.status === 'failed'
+                ? 'error'
+                : check.status === 'indexing'
+                  ? 'indexing'
+                  : 'queued'
+          if (newProgress[check.fileName] !== nextStatus) {
+            newProgress[check.fileName] = nextStatus
+            hasStatusChange = true
+          }
+          if (nextStatus === 'done' || nextStatus === 'error') {
+            pendingTasks.delete(check.taskId)
+          }
+        }
+        if (hasStatusChange) {
+          setProgress({ ...newProgress })
         }
       }
     }
@@ -159,7 +225,6 @@ export default function UploadMediaModal({ open, onClose }: UploadMediaModalProp
           await new Promise(r => setTimeout(r, INTER_VIDEO_DELAY_MS))
         }
         await uploadWithRetry(file, type)
-        newProgress[file.name] = 'done'
       } catch (e: unknown) {
         newProgress[file.name] = 'error'
         allOk = false
@@ -168,16 +233,29 @@ export default function UploadMediaModal({ open, onClose }: UploadMediaModalProp
       setProgress({ ...newProgress })
     }
 
+    if (videoTasks.length > 0) {
+      void refresh(true)
+      await pollVideoTasksUntilComplete()
+    }
+
+    const hasFailures = Object.values(newProgress).some((status) => status === 'error')
     setUploading(false)
-    if (allOk) {
-      setFiles([])
-      setProgress({})
-      onClose()
-      navigate('/dashboard')
+    if (!hasFailures && allOk) {
+      void refresh(true)
+      window.setTimeout(() => {
+        setBackgroundPanelVisible(false)
+        setFiles([])
+        setProgress({})
+        setError(null)
+      }, 2500)
     }
   }
 
   function handleClose() {
+    if (uploading) {
+      onClose()
+      return
+    }
     if (!uploading) {
       setFiles([])
       setProgress({})
@@ -190,103 +268,219 @@ export default function UploadMediaModal({ open, onClose }: UploadMediaModalProp
     ...Array.from(VIDEO_EXTENSIONS),
     ...Array.from(DOC_EXTENSIONS),
   ].join(',')
+  const progressEntries = files.map(({ file, type }) => ({
+    file,
+    type,
+    status: progress[file.name],
+  }))
+  const completedCount = progressEntries.filter(({ status }) => status === 'done').length
+  const failedCount = progressEntries.filter(({ status }) => status === 'error').length
+  const activeCount = progressEntries.filter(({ status }) =>
+    status === 'uploading' || status === 'processing' || status === 'queued' || status === 'indexing' || status === 'pending',
+  ).length
+
+  function statusLabel(status: UploadStatus | undefined, type: MediaType) {
+    if (status === 'uploading') return 'Uploading...'
+    if (status === 'processing') return 'Processing...'
+    if (status === 'queued') return type === 'video' ? 'Queued' : 'Pending'
+    if (status === 'indexing') return 'Indexing...'
+    if (status === 'done') return type === 'video' ? 'Ready' : 'Done'
+    if (status === 'error') return 'Failed'
+    return ''
+  }
 
   return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-brand-charcoal/40 backdrop-blur-sm" onClick={handleClose} aria-hidden />
-      <div className="relative w-full max-w-md rounded-xl border border-border bg-surface shadow-xl" role="dialog" aria-modal="true" aria-labelledby="upload-media-title">
-        <div className="flex items-center justify-between border-b border-border px-5 py-4">
-          <h2 id="upload-media-title" className="text-lg font-semibold text-text-primary">Upload videos or documents</h2>
-          <button type="button" onClick={handleClose} disabled={uploading} className="p-2 rounded-lg text-text-tertiary hover:bg-card hover:text-text-primary transition-colors disabled:opacity-50" aria-label="Close">
-            <IconClose />
-          </button>
-        </div>
-
-        <div className="p-5">
-          <input
-            ref={inputRef}
-            type="file"
-            accept={acceptList}
-            multiple
-            className="hidden"
-            onChange={(e) => handleFiles(e.target.files)}
-          />
-
-          {files.length === 0 ? (
-            <button
-              type="button"
-              onClick={() => inputRef.current?.click()}
-              onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
-              onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleFiles(e.dataTransfer.files) }}
-              className="w-full rounded-xl border-2 border-dashed border-border bg-card py-12 px-6 flex flex-col items-center gap-4 text-text-tertiary hover:border-accent hover:bg-accent/5 hover:text-text-secondary transition-colors"
-            >
-              <div className="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center">
-                <IconUpload className="w-6 h-6 text-gray-500" />
-              </div>
-              <span className="text-sm font-medium">Click to select or drag and drop</span>
-              <div className="flex flex-wrap items-center justify-center gap-2">
-                <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium text-text-secondary border border-border">
-                  Videos: MP4, MOV, AVI
-                </span>
-                <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium text-text-secondary border border-border">
-                  Docs: PDF, DOCX, PPTX, TXT
-                </span>
-              </div>
-              <span className="text-xs">Videos max {VIDEO_MAX_MB} MB · Documents max {DOC_MAX_MB} MB</span>
-            </button>
-          ) : (
-            <div className="space-y-2 max-h-60 overflow-y-auto">
-              {files.map(({ file, type }, i) => {
-                const status = progress[file.name]
-                return (
-                  <div key={`${file.name}-${i}`} className="flex items-center gap-3 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
-                    <span
-                      className={`shrink-0 px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                        type === 'video' ? 'bg-blue-100 text-blue-800 border border-blue-200' : 'bg-amber-100 text-amber-800 border border-amber-200'
-                      }`}
-                    >
-                      {type === 'video' ? 'Video' : 'Doc'}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900 truncate">{file.name}</p>
-                      <p className="text-xs text-gray-500">{(file.size / (1024 * 1024)).toFixed(1)} MB</p>
-                    </div>
-                    {status === 'uploading' && <div className="w-4 h-4 border-2 border-gray-300 border-t-gray-800 rounded-full animate-spin shrink-0" />}
-                    {status === 'processing' && <span className="text-amber-600 text-xs shrink-0">Processing...</span>}
-                    {status === 'done' && <span className="text-green-600 text-sm shrink-0">Done</span>}
-                    {status === 'error' && <span className="text-red-600 text-sm shrink-0">Failed</span>}
-                    {!status && !uploading && (
-                      <button type="button" onClick={() => removeFile(i)} className="text-gray-400 hover:text-gray-700 shrink-0 text-sm">Remove</button>
-                    )}
-                  </div>
-                )
-              })}
-              {!uploading && (
-                <button type="button" onClick={() => inputRef.current?.click()} className="w-full py-2 text-sm text-gray-500 hover:text-gray-700 underline underline-offset-2">
-                  + Add more files
-                </button>
-              )}
+    <>
+      {open && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-brand-charcoal/40 backdrop-blur-sm" onClick={handleClose} aria-hidden />
+          <div className="relative w-full max-w-md rounded-xl border border-border bg-surface shadow-xl" role="dialog" aria-modal="true" aria-labelledby="upload-media-title">
+            <div className="flex items-center justify-between border-b border-border px-5 py-4">
+              <h2 id="upload-media-title" className="text-lg font-semibold text-text-primary">Upload videos or documents</h2>
+              <button type="button" onClick={handleClose} className="p-2 rounded-lg text-text-tertiary hover:bg-card hover:text-text-primary transition-colors" aria-label="Close">
+                <IconClose />
+              </button>
             </div>
-          )}
 
-          {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+            <div className="p-5">
+              <input
+                ref={inputRef}
+                type="file"
+                accept={acceptList}
+                multiple
+                className="hidden"
+                onChange={(e) => handleFiles(e.target.files)}
+              />
 
-          <div className="mt-5 flex justify-end gap-2">
-            <button type="button" onClick={handleClose} disabled={uploading} className="h-8 px-3 rounded-[9.6px] text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 transition-colors disabled:opacity-50">
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleUpload}
-              disabled={!files.length || uploading}
-              className="h-8 px-3 rounded-[9.6px] text-sm font-medium bg-brand-charcoal text-brand-white hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
-            >
-              {uploading && <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
-              {uploading ? 'Uploading...' : `Upload ${files.length || ''}`}
-            </button>
+              {files.length === 0 ? (
+                <button
+                  type="button"
+                  onClick={() => inputRef.current?.click()}
+                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
+                  onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleFiles(e.dataTransfer.files) }}
+                  className="w-full rounded-xl border-2 border-dashed border-border bg-card py-12 px-6 flex flex-col items-center gap-4 text-text-tertiary hover:border-accent hover:bg-accent/5 hover:text-text-secondary transition-colors"
+                >
+                  <div className="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center">
+                    <IconUpload className="w-6 h-6 text-gray-500" />
+                  </div>
+                  <span className="text-sm font-medium">Click to select or drag and drop</span>
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium text-text-secondary border border-border">
+                      Videos: MP4, MOV, AVI
+                    </span>
+                    <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium text-text-secondary border border-border">
+                      Docs: PDF, DOCX, PPTX, TXT
+                    </span>
+                  </div>
+                  <span className="text-xs">Videos max {VIDEO_MAX_MB} MB · Documents max {DOC_MAX_MB} MB</span>
+                </button>
+              ) : (
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {files.map(({ file, type }, i) => {
+                    const status = progress[file.name]
+                    return (
+                      <div key={`${file.name}-${i}`} className="flex items-center gap-3 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
+                        <span
+                          className={`shrink-0 px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                            type === 'video' ? 'bg-blue-100 text-blue-800 border border-blue-200' : 'bg-amber-100 text-amber-800 border border-amber-200'
+                          }`}
+                        >
+                          {type === 'video' ? 'Video' : 'Doc'}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate">{file.name}</p>
+                          <p className="text-xs text-gray-500">{(file.size / (1024 * 1024)).toFixed(1)} MB</p>
+                        </div>
+                        {(status === 'uploading' || status === 'processing' || status === 'indexing') && (
+                          <div className="w-4 h-4 border-2 border-gray-300 border-t-gray-800 rounded-full animate-spin shrink-0" />
+                        )}
+                        {(status === 'queued' || status === 'done' || status === 'error') && (
+                          <span
+                            className={`text-xs shrink-0 ${
+                              status === 'queued'
+                                ? 'text-blue-600'
+                                : status === 'done'
+                                  ? 'text-green-600'
+                                  : 'text-red-600'
+                            }`}
+                          >
+                            {statusLabel(status, type)}
+                          </span>
+                        )}
+                        {!status && !uploading && (
+                          <button type="button" onClick={() => removeFile(i)} className="text-gray-400 hover:text-gray-700 shrink-0 text-sm">Remove</button>
+                        )}
+                      </div>
+                    )
+                  })}
+                  {!uploading && (
+                    <button type="button" onClick={() => inputRef.current?.click()} className="w-full py-2 text-sm text-gray-500 hover:text-gray-700 underline underline-offset-2">
+                      + Add more files
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+              {uploading && (
+                <p className="mt-3 text-xs text-text-secondary">
+                  The popup will close once you start the upload. You can keep using the dashboard while it runs.
+                </p>
+              )}
+
+              <div className="mt-5 flex justify-end gap-2">
+                <button type="button" onClick={handleClose} className="h-8 px-3 rounded-[9.6px] text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 transition-colors">
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleUpload}
+                  disabled={!files.length || uploading}
+                  className="h-8 px-3 rounded-[9.6px] text-sm font-medium bg-brand-charcoal text-brand-white hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+                >
+                  {uploading && <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+                  {uploading ? 'Running...' : `Upload ${files.length || ''}`}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
-    </div>
+      )}
+
+      {showBackgroundPanel && (
+        <div className="fixed bottom-4 right-4 z-[180] w-[min(24rem,calc(100vw-2rem))] rounded-xl border border-border bg-surface shadow-xl">
+          <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
+            <div>
+              <p className="text-sm font-semibold text-text-primary">
+                {uploading ? 'Upload running in background' : failedCount > 0 ? 'Upload finished with errors' : 'Upload complete'}
+              </p>
+              <p className="text-xs text-text-secondary">
+                {uploading
+                  ? 'You can continue using the dashboard while files upload and videos finish indexing.'
+                  : failedCount > 0
+                    ? `${failedCount} file${failedCount === 1 ? '' : 's'} failed`
+                    : `${completedCount} file${completedCount === 1 ? '' : 's'} completed`}
+              </p>
+            </div>
+            {!uploading && (
+              <button
+                type="button"
+                onClick={() => {
+                  setBackgroundPanelVisible(false)
+                  setFiles([])
+                  setProgress({})
+                  setError(null)
+                }}
+                className="p-1 rounded-md text-text-tertiary hover:bg-card hover:text-text-primary transition-colors"
+                aria-label="Dismiss upload status"
+              >
+                <IconClose className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+
+          <div className="max-h-64 overflow-y-auto px-4 py-3 space-y-2">
+            {progressEntries.map(({ file, type, status }, i) => (
+              <div key={`${file.name}-bg-${i}`} className="flex items-center gap-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                <span
+                  className={`shrink-0 px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                    type === 'video' ? 'bg-blue-100 text-blue-800 border border-blue-200' : 'bg-amber-100 text-amber-800 border border-amber-200'
+                  }`}
+                >
+                  {type === 'video' ? 'Video' : 'Doc'}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-gray-900">{file.name}</p>
+                  <p className="text-xs text-gray-500">{(file.size / (1024 * 1024)).toFixed(1)} MB</p>
+                </div>
+                {(status === 'uploading' || status === 'processing' || status === 'indexing') && (
+                  <div className="w-4 h-4 border-2 border-gray-300 border-t-gray-800 rounded-full animate-spin shrink-0" />
+                )}
+                {status && !(status === 'uploading' || status === 'processing' || status === 'indexing') && (
+                  <span
+                    className={`text-xs font-medium shrink-0 ${
+                      status === 'queued'
+                        ? 'text-blue-600'
+                        : status === 'done'
+                          ? 'text-green-600'
+                          : status === 'error'
+                            ? 'text-red-600'
+                            : 'text-gray-500'
+                    }`}
+                  >
+                    {statusLabel(status, type)}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-center justify-between border-t border-border px-4 py-3 text-xs text-text-secondary">
+            <span>{activeCount > 0 ? `${activeCount} still running` : 'All files finished'}</span>
+            <span>{completedCount} complete{failedCount > 0 ? ` · ${failedCount} failed` : ''}</span>
+          </div>
+        </div>
+      )}
+    </>
   )
 }
