@@ -521,6 +521,13 @@ def _embed_via_requests(texts: list[str], input_type: str) -> list[list[float]]:
     """Call NVIDIA embeddings API directly with requests to guarantee input_type is sent."""
     import requests as _req
 
+    t0 = time.perf_counter()
+    log.info(
+        "[NEMO_EMBED] Request start model=%s input_type=%s texts=%d",
+        EMBED_MODEL,
+        input_type,
+        len(texts),
+    )
     resp = _req.post(
         "https://integrate.api.nvidia.com/v1/embeddings",
         headers={
@@ -537,7 +544,17 @@ def _embed_via_requests(texts: list[str], input_type: str) -> list[list[float]]:
     )
     resp.raise_for_status()
     data = resp.json()
-    return [d["embedding"] for d in data["data"]]
+    vectors = [d["embedding"] for d in data["data"]]
+    first_dim = len(vectors[0]) if vectors else 0
+    log.info(
+        "[NEMO_EMBED] Request done model=%s input_type=%s vectors=%d dim=%d time=%.1fms",
+        EMBED_MODEL,
+        input_type,
+        len(vectors),
+        first_dim,
+        (time.perf_counter() - t0) * 1000,
+    )
+    return vectors
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:

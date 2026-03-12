@@ -413,7 +413,6 @@ def api_generate_video_analysis(video_id: str):
             s3_uri,
             VIDEO_ANALYSIS_PROMPT,
             temperature=0,
-            response_schema=VIDEO_ANALYSIS_SCHEMA,
         )
         log.info("[ANALYSIS] Pegasus response received in %.1fs (len=%d)", _time.perf_counter() - t0, len(raw_text or ""))
         log.info("[ANALYSIS] ── RAW PEGASUS RESPONSE START ──\n%s", raw_text)
@@ -707,6 +706,9 @@ def api_video_insights(video_id: str):
                 video_duration_sec = 0.0
 
         empty_insights = {
+            "empty": True,
+            "objects_empty": True,
+            "people_empty": True,
             "objects": [],
             "detected_faces": [],
             "people": [],
@@ -720,6 +722,7 @@ def api_video_insights(video_id: str):
             if rec.get("id") == video_id:
                 m = rec.setdefault("metadata", {})
                 m["video_insights"] = empty_insights
+                m["insights_empty"] = True
                 # Face presence is derived entirely from insights; clear so it can be recomputed later if needed.
                 m.pop("face_presence", None)
                 break
@@ -950,6 +953,9 @@ def api_video_insights(video_id: str):
             objects_to_save.append(ob_save)
 
         insights = {
+            "empty": False,
+            "objects_empty": len(objects_to_save) == 0,
+            "people_empty": len(detected_faces) == 0,
             "objects": objects_to_save,
             "detected_faces": detected_faces,
             "keyframes": keyframes_info,
@@ -961,6 +967,7 @@ def api_video_insights(video_id: str):
             if rec.get("id") == video_id:
                 meta = rec.setdefault("metadata", {})
                 meta["video_insights"] = insights_to_save
+                meta["insights_empty"] = bool(insights_to_save.get("empty"))
                 meta.pop("face_presence", None)  # force face-presence API to recompute with new faces
                 break
         vs_save()

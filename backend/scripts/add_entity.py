@@ -10,7 +10,7 @@ def main():
     from dotenv import load_dotenv
     load_dotenv()
     from app import create_app
-    app = create_app()
+    app = create_app(enable_startup_tasks=False)
 
     image_path = Path(sys.argv[1]) if len(sys.argv) > 1 else backend.parent / "hrishi.png"
     name = sys.argv[2] if len(sys.argv) > 2 else "Hrishi"

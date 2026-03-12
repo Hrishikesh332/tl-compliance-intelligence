@@ -1,13 +1,22 @@
+import atexit
 import logging
 import os
-import time
 import threading
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import requests
 from flask import Flask, g, request
 from flask_cors import CORS
+from dotenv import load_dotenv
+from apscheduler.schedulers.background import BackgroundScheduler
 
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+_self_ping_lock = threading.Lock()
+_self_ping_scheduler: BackgroundScheduler | None = None
+
+load_dotenv()
 
 
 def _setup_logging(app: Flask) -> None:
@@ -23,7 +32,7 @@ def _setup_logging(app: Flask) -> None:
     app.logger.info("Logging initialised at %s level", level_name)
 
 
-def create_app():
+def create_app(*, enable_startup_tasks: bool = True):
     app = Flask(__name__)
     app.config["MODEL_DIR"] = Path(__file__).resolve().parent.parent / "models"
 
@@ -69,11 +78,102 @@ def create_app():
     app.register_blueprint(index_bp, url_prefix="/api/index")
     app.register_blueprint(documents_bp, url_prefix="/api/documents")
 
+    if enable_startup_tasks:
+        _configure_self_ping_scheduler(app)
+
     warmup_enabled = os.environ.get("WARMUP_ON_STARTUP", "true").strip().lower() in ("1", "true", "yes", "on")
-    if warmup_enabled:
+    if enable_startup_tasks and warmup_enabled:
         threading.Thread(target=_warmup_video_list, args=(app,), daemon=True).start()
 
     return app
+
+
+def _is_truthy(value: str | None, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _get_self_ping_base_url() -> str:
+    for env_var in ("SELF_PING_URL", "APP_URL", "RENDER_EXTERNAL_URL"):
+        value = (os.getenv(env_var) or "").strip()
+        if value:
+            return value.rstrip("/")
+    return ""
+
+
+def _should_enable_self_ping() -> bool:
+    if not _is_truthy(os.getenv("SELF_PING_ENABLED"), default=True):
+        return False
+
+    app_url = _get_self_ping_base_url().lower()
+    if not app_url:
+        return False
+
+    return all(local_host not in app_url for local_host in ("localhost", "127.0.0.1"))
+
+
+def _self_ping_health(app: Flask, *, timeout_seconds: float) -> None:
+    base_url = _get_self_ping_base_url()
+    if not base_url:
+        return
+
+    health_url = f"{base_url}/health"
+    try:
+        response = requests.get(
+            health_url,
+            timeout=timeout_seconds,
+            headers={"User-Agent": "video-compliance-self-ping/1.0"},
+        )
+        if response.ok:
+            app.logger.info("Self-ping OK: %s -> %s", health_url, response.status_code)
+        else:
+            app.logger.warning("Self-ping returned %s for %s", response.status_code, health_url)
+    except Exception as exc:
+        app.logger.warning("Self-ping failed for %s: %s", health_url, exc)
+
+
+def _configure_self_ping_scheduler(app: Flask) -> None:
+    global _self_ping_scheduler
+
+    if not _should_enable_self_ping():
+        app.logger.info("Self-ping scheduler disabled (no public app URL or explicitly disabled)")
+        return
+
+    with _self_ping_lock:
+        if _self_ping_scheduler and _self_ping_scheduler.running:
+            return
+
+        interval_minutes = max(float(os.getenv("SELF_PING_INTERVAL_MINUTES", "9")), 1.0)
+        timeout_seconds = max(float(os.getenv("SELF_PING_TIMEOUT_SECONDS", "10")), 1.0)
+        start_delay_seconds = max(float(os.getenv("SELF_PING_START_DELAY_SECONDS", "30")), 0.0)
+        base_url = _get_self_ping_base_url()
+
+        scheduler = BackgroundScheduler(timezone="UTC")
+        scheduler.add_job(
+            _self_ping_health,
+            "interval",
+            minutes=interval_minutes,
+            id="self_ping_health",
+            kwargs={"app": app, "timeout_seconds": timeout_seconds},
+            next_run_time=datetime.now(timezone.utc) + timedelta(seconds=start_delay_seconds),
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=max(int(interval_minutes * 60), 60),
+        )
+        scheduler.start()
+        atexit.register(lambda: scheduler.shutdown(wait=False))
+        _self_ping_scheduler = scheduler
+
+        app.logger.info(
+            "Self-ping scheduler started for %s every %.1f minutes",
+            base_url,
+            interval_minutes,
+        )
+        app.logger.info(
+            "Note: in-process self-ping cannot wake a Render free instance after it has already spun down"
+        )
 
 
 def _warmup_video_list(app: Flask) -> None:

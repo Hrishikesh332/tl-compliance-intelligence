@@ -82,6 +82,9 @@ type ObjectInsight = {
   bbox?: { left: number; top: number; width: number; height: number }
 }
 type VideoInsights = {
+  empty?: boolean
+  people_empty?: boolean
+  objects_empty?: boolean
   people?: PersonInsight[]
   mentioned?: string[]
   detected_faces?: DetectedFace[]
@@ -1407,6 +1410,9 @@ export default function VideoAnalysis() {
         if (data?.insights && typeof data.insights === 'object') {
           const raw = data.insights
           setInsights({
+            empty: !!raw.empty,
+            people_empty: !!raw.people_empty,
+            objects_empty: !!raw.objects_empty,
             people: Array.isArray(raw.people) ? raw.people : undefined,
             mentioned: Array.isArray(raw.mentioned) ? raw.mentioned : undefined,
             detected_faces: Array.isArray(raw.detected_faces) ? raw.detected_faces : undefined,
@@ -1477,6 +1483,9 @@ export default function VideoAnalysis() {
       if (mountedRef.current && data.insights && typeof data.insights === 'object') {
         const raw = data.insights
         setInsights({
+          empty: !!raw.empty,
+          people_empty: !!raw.people_empty,
+          objects_empty: !!raw.objects_empty,
           people: Array.isArray(raw.people) ? raw.people : undefined,
           mentioned: Array.isArray(raw.mentioned) ? raw.mentioned : undefined,
           detected_faces: Array.isArray(raw.detected_faces) ? raw.detected_faces : undefined,
@@ -1492,8 +1501,11 @@ export default function VideoAnalysis() {
     }
   }
 
+  const peopleSectionForcedEmpty = !!insights?.empty || !!insights?.people_empty
   const shouldShowPeopleSection =
-    !insights || insightsLoading || generatingInsights || (peopleCount + mentionedNames.length) > 0
+    !peopleSectionForcedEmpty && (
+      !insights || insightsLoading || generatingInsights || (peopleCount + mentionedNames.length) > 0
+    )
 
   /** Single entry point: run content analysis then people/objects insights; updates analysisStep for UI */
   async function runFullAnalysis() {

@@ -1568,14 +1568,22 @@ def extract_unique_faces_from_video(
     return result
 
 
-def get_search_embedding_from_request(data: dict, request) -> tuple[list[float] | None, str | None, bool, str]:
+def get_search_embedding_from_request(
+    data: dict,
+    request=None,
+    *,
+    request_query: str | None = None,
+    image_bytes: bytes | None = None,
+) -> tuple[list[float] | None, str | None, bool, str]:
     """Resolve query/entity/image to a single embedding for video search.
 
     When entity_ids (or entity_id) are provided: returns the stored Marengo
     embedding from the index only. No ResNet, no face detection — used for
     similarity search against video clip embeddings.
     """
-    query = (data.get("query") or data.get("text") or request.form.get("query") or "").strip()
+    if request_query is None and request is not None:
+        request_query = request.form.get("query") or request.form.get("text") or ""
+    query = (data.get("query") or data.get("text") or request_query or "").strip()
     entity_ids = data.get("entity_ids")
     if entity_ids is None and data.get("entity_id"):
         entity_ids = [data.get("entity_id")]
@@ -1594,8 +1602,7 @@ def get_search_embedding_from_request(data: dict, request) -> tuple[list[float] 
         name = (rec.get("metadata") or {}).get("name") or entity_id
         return emb, str(name), True, None
 
-    image_bytes = None
-    if request.files and "image" in request.files:
+    if image_bytes is None and request is not None and request.files and "image" in request.files:
         file = request.files["image"]
         if file.filename:
             image_bytes = file.read()

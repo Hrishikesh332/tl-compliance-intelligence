@@ -1,4 +1,6 @@
 import logging
+from concurrent.futures import ThreadPoolExecutor
+import time as _time
 
 from flask import Blueprint, jsonify, request
 
@@ -26,20 +28,30 @@ search_bp = Blueprint("search", __name__)
 # ---------------------------------------------------------------------------
 
 
-def _run_video_search(data: dict, flask_request) -> tuple[list[dict], str, str | None]:
+def _run_video_search(
+    data: dict,
+    *,
+    request_query: str = "",
+    request_top_k: int | None = None,
+    image_bytes: bytes | None = None,
+) -> tuple[list[dict], str, str | None]:
     """Run the full video search pipeline and return (results, display_query, error).
 
     Entity search (when entity_id(s) are provided): search VIDEOS only. Uses
     precomputed Marengo embeddings: entity embedding vs video clip embeddings
     (cosine similarity). No ResNet, no face detection, no frame extraction.
     """
-    query_emb, display_query, is_entity_search, err = get_search_embedding_from_request(data, flask_request)
+    query_emb, display_query, is_entity_search, err = get_search_embedding_from_request(
+        data,
+        request_query=request_query,
+        image_bytes=image_bytes,
+    )
     log.info("[SEARCH] type=%s query=%r", "entity" if is_entity_search else "text", display_query or "(none)")
     if err or not query_emb:
         return [], display_query or "", err or "Could not get search embedding"
 
     default_top_k = 8 if is_entity_search else 16
-    top_k = data.get("top_k") or flask_request.args.get("top_k", type=int) or default_top_k
+    top_k = data.get("top_k") or request_top_k or default_top_k
     top_k = max(1, min(50, top_k))
     clips_per_video = data.get("clips_per_video")
     if clips_per_video is None:
@@ -136,11 +148,38 @@ def _run_video_search(data: dict, flask_request) -> tuple[list[dict], str, str |
     return out, display_query, None
 
 
+def _run_document_search(text_query: str, doc_top_k: int) -> list[dict]:
+    from app.services.nemo_retriever import embed_query, search_docs
+
+    t0 = _time.perf_counter()
+    log.info("[DOC_SEARCH] Started text query=%r top_k=%d", text_query, doc_top_k)
+    query_emb = embed_query(text_query)
+    docs = search_docs(query_emb, top_k=doc_top_k)
+    log.info(
+        "[DOC_SEARCH] Completed %d doc results in %.1fms",
+        len(docs),
+        (_time.perf_counter() - t0) * 1000,
+    )
+    return docs
+
+
 @search_bp.route("/videos", methods=["POST"])
 def api_search_videos():
     data = request.get_json(silent=True) or {}
+    request_query = (request.form.get("query") or request.form.get("text") or "").strip()
+    request_top_k = request.args.get("top_k", type=int)
+    image_bytes = None
+    if request.files and "image" in request.files:
+        file = request.files["image"]
+        if file.filename:
+            image_bytes = file.read()
     try:
-        video_results, display_query, err = _run_video_search(data, request)
+        video_results, display_query, err = _run_video_search(
+            data,
+            request_query=request_query,
+            request_top_k=request_top_k,
+            image_bytes=image_bytes,
+        )
         if err:
             log.warning("[SEARCH] Embedding error: %s", err)
             return jsonify({"error": err}), 400
@@ -164,33 +203,51 @@ def api_search_videos():
 def api_search_hybrid():
     """Single endpoint that returns both video results and document chunks."""
     data = request.get_json(silent=True) or {}
-    text_query = (data.get("query") or "").strip()
+    request_query = (request.form.get("query") or request.form.get("text") or "").strip()
+    request_top_k = request.args.get("top_k", type=int)
+    image_bytes = None
+    if request.files and "image" in request.files:
+        file = request.files["image"]
+        if file.filename:
+            image_bytes = file.read()
+    text_query = (data.get("query") or data.get("text") or request_query or "").strip()
+    doc_top_k = max(1, min(10, int(data.get("doc_top_k", 5))))
 
-    # --- Video search (always runs) ---
     video_results: list[dict] = []
     display_query = text_query
     video_error: str | None = None
-    try:
-        video_results, display_query, video_error = _run_video_search(data, request)
-    except Exception as e:
-        log.error("[HYBRID] Video search failed: %s", e, exc_info=True)
-        video_error = str(e)
+    doc_results: list[dict] = []
+    doc_error: str | None = None
+
+    hybrid_t0 = _time.perf_counter()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        log.info("[HYBRID] Launching video search + doc search in parallel")
+        video_future = pool.submit(
+            _run_video_search,
+            data,
+            request_query=request_query,
+            request_top_k=request_top_k,
+            image_bytes=image_bytes,
+        )
+        doc_future = pool.submit(_run_document_search, text_query, doc_top_k) if text_query else None
+        if doc_future is None:
+            log.info("[HYBRID] Skipping doc search (empty text query)")
+
+        try:
+            video_results, display_query, video_error = video_future.result()
+        except Exception as e:
+            log.error("[HYBRID] Video search failed: %s", e, exc_info=True)
+            video_error = str(e)
+
+        if doc_future is not None:
+            try:
+                doc_results = doc_future.result()
+            except Exception as e:
+                log.error("[HYBRID] Document search failed: %s", e, exc_info=True)
+                doc_error = str(e)
 
     if video_error:
         log.warning("[HYBRID] Video search error (non-fatal): %s", video_error)
-
-    # --- Document search (only when there is a text query) ---
-    doc_results: list[dict] = []
-    doc_error: str | None = None
-    if text_query:
-        try:
-            from app.services.nemo_retriever import embed_query, search_docs
-            doc_top_k = max(1, min(10, int(data.get("doc_top_k", 5))))
-            query_emb = embed_query(text_query)
-            doc_results = search_docs(query_emb, top_k=doc_top_k)
-        except Exception as e:
-            log.error("[HYBRID] Document search failed: %s", e, exc_info=True)
-            doc_error = str(e)
 
     # If video search had an embedding error and there are no doc results
     # either, surface that error to the client.
@@ -208,8 +265,8 @@ def api_search_hybrid():
         resp["doc_error"] = doc_error
 
     log.info(
-        "[HYBRID] Returning %d video(s) + %d doc(s) for query=%r",
-        len(video_results), len(doc_results), display_query,
+        "[HYBRID] Returning %d video(s) + %d doc(s) for query=%r total=%.1fms",
+        len(video_results), len(doc_results), display_query, (_time.perf_counter() - hybrid_t0) * 1000,
     )
     return jsonify(resp)
 

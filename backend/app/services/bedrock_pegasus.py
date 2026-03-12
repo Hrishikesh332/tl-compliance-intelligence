@@ -105,6 +105,12 @@ def analyze_video(
                 contentType="application/json",
                 accept="application/json",
             )
+        except ClientError as e:
+            err = e.response.get("Error", {}) if hasattr(e, "response") else {}
+            code = err.get("Code", "")
+            msg = err.get("Message", "") or str(e)
+            log.error("[Pegasus] Bedrock invoke failed (code=%s): %s", code or "unknown", msg, exc_info=True)
+            raise
         finally:
             log.info("[Pegasus] Bedrock call finished in %.1fs", time.perf_counter() - t0)
 

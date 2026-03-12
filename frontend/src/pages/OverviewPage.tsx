@@ -135,7 +135,7 @@ export default function OverviewPage() {
                 Watch Demo
               </a>
               <a
-                href="https://www.twelvelabs.io/developers"
+                href="https://github.com/Hrishikesh332/tl-compliance-intelligence"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 h-10 px-5 rounded-xl border border-border text-text-primary font-semibold text-sm hover:bg-card transition-colors"
@@ -264,17 +264,28 @@ export default function OverviewPage() {
               in under two minutes.
             </p>
           </div>
-          <div className="rounded-2xl border-2 border-dashed border-gray-300 bg-brand-charcoal flex flex-col items-center justify-center aspect-video max-w-4xl mx-auto overflow-hidden relative">
-            <div className="w-16 h-16 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center mb-4 border border-white/20">
-              <svg className="w-7 h-7 text-white ml-0.5" viewBox="0 0 24 24" fill="currentColor">
-                <polygon points="5 3 19 12 5 21 5 3" />
-              </svg>
+          <div className="max-w-4xl mx-auto">
+            <div className="rounded-2xl border border-border bg-brand-charcoal aspect-video overflow-hidden relative">
+              <iframe
+                className="absolute inset-0 w-full h-full"
+                src="https://www.youtube-nocookie.com/embed/W9W6vE-tSIQ"
+                title="Demo: See it in action"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerPolicy="strict-origin-when-cross-origin"
+                allowFullScreen
+              />
             </div>
-            <p className="text-white/60 font-medium text-sm">Demo Video</p>
-            <p className="text-white/40 text-xs mt-1.5 max-w-xs text-center">
-              Replace this placeholder with a &lt;video&gt; element or an iframe embed
-              pointing to your demo recording.
-            </p>
+            <div className="mt-3 text-center">
+              <a
+                href="https://youtu.be/W9W6vE-tSIQ"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 text-sm font-semibold text-text-primary hover:underline"
+              >
+                Open on YouTube
+                <IconArrowRight className="w-4 h-4" />
+              </a>
+            </div>
           </div>
         </div>
       </section>
@@ -449,7 +460,7 @@ export default function OverviewPage() {
           </p>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
             <a
-              href="https://www.twelvelabs.io/developers"
+              href="https://github.com/Hrishikesh332/tl-compliance-intelligence"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 h-11 px-6 rounded-xl bg-brand-charcoal text-brand-white font-semibold text-sm hover:bg-gray-600 transition-colors"
