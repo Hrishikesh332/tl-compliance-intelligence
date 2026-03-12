@@ -1,16 +1,8 @@
-# Multi-Source Legal Evidence Investigator
+
+
+<h1 align="center">Multi-Source Legal Evidence Investigator</h1>
 
 Ingest video from bodycams, CCTV, mobile, and dashcams to search timelines, track people, analyze footage, and surface compliance risks from a single intelligence layer.
-
-Built for compliance, safety, legal, and security investigation workflows.
-
-It lets you ingest video from many sources (bodycams, CCTV, mobile, dashcams), index it with multimodal AI, and then -
-
-- **Search with natural language** across video timelines.
-- **Track people by face** across all indexed footage.
-- **Generate per‑video analysis** (risk level, categories, transcript, objects).
-- **Ask questions about a video** and jump to timestamped answers.
-- **Surface compliance & safety risks** in a single dashboard.
 
 The frontend is a Vite + React + Tailwind app. The backend is a Python/Flask API that orchestrates TwelveLabs Marengo/Pegasus via AWS Bedrock, S3 storage, vector indexing, and FFmpeg for frame extraction.
 
@@ -22,36 +14,15 @@ Everything you need for video compliance on top of TwelveLabs:
 
 🧠 **Video indexing & embedding** — Upload video assets and generate multimodal embeddings (visual + audio) using TwelveLabs Marengo for semantic search.
 
-
 🔍 **Natural language search** — Search inside videos with plain English and get timestamped results ranked by relevance.
-
 
 🧑‍💼 **Face‑based entity matching** — Register a face as an entity and find every video and clip where that person appears.
 
-
 📈 **Automated video analysis** — Per‑video reports including risk level, categories, detected objects, and transcript via TwelveLabs Pegasus.
-
 
 💬 **Conversational video Q&A** — Ask questions about any video and get answers with clickable timestamps to the relevant moment.
 
-
 🛡️ **Risk & compliance insights** — Surface safety hazards, violations, and risk scores, with people, objects, and transcript in a single dashboard.
-
----
-
-## Powered by TwelveLabs via AWS
-
-This app is built on TwelveLabs multimodal video understanding:
-
-- **Marengo Embed** — Multimodal embeddings for visual + audio search.
-- **Pegasus Generate** — AI summaries, transcripts, risk analysis, and object detection with timestamps.
-- **Semantic search & face matching** — Natural language video search and person tracking via face embeddings.
-
-Infrastructure and tooling:
-
-- **AWS Bedrock Runtime** — Invokes TwelveLabs Marengo and Pegasus.
-- **Amazon S3 + vector index** — Video asset storage and cosine‑similarity search over embeddings.
-- **FFmpeg** — Frame extraction (thumbnails and faces) and video processing.
 
 ---
 
@@ -74,7 +45,6 @@ Infrastructure and tooling:
 ![Amazon_S3](https://img.shields.io/badge/Amazon_S3-569A31?style=flat-square&logo=amazons3&logoColor=white)
 ![Amazon_Bedrock](https://img.shields.io/badge/Amazon_Bedrock-232F3E?style=flat-square&logo=amazonaws&logoColor=white)
 ![FFmpeg](https://img.shields.io/badge/FFmpeg-007808?style=flat-square&logo=ffmpeg&logoColor=white)
-
 
 ---
 
@@ -138,6 +108,22 @@ cd backend
 
 ---
 
+## Powered by TwelveLabs via AWS
+
+This app is built on TwelveLabs multimodal video understanding:
+
+- **Marengo Embed** — Multimodal embeddings for visual + audio search.
+- **Pegasus Generate** — AI summaries, transcripts, risk analysis, and object detection with timestamps.
+- **Semantic search & face matching** — Natural language video search and person tracking via face embeddings.
+
+Infrastructure and tooling:
+
+- **AWS Bedrock Runtime** — Invokes TwelveLabs Marengo and Pegasus.
+- **Amazon S3 + vector index** — Video asset storage and cosine‑similarity search over embeddings.
+- **FFmpeg** — Frame extraction (thumbnails and faces) and video processing.
+
+---
+
 ## Core Use Cases
 
 Built for high‑stakes investigations where every second of footage contributes to the story
@@ -148,15 +134,6 @@ Built for high‑stakes investigations where every second of footage contributes
 - **Insurance claims investigation** — Cross‑reference claimant statements with video from multiple sources to verify incident details and detect potential fraud.
 
 ---
-
-## Impact – Who Benefits & How
-
-Designed for teams that work with video evidence daily — from compliance audits to security investigations.
-
-- **Compliance officers** — Instantly flag violations and generate audit‑ready PDF reports with timestamped evidence.
-- **Security teams** — Track persons of interest across multiple camera feeds with face‑based entity search.
-- **Safety managers** — Detect missing PPE, blocked exits, and hazard signs automatically across all footage.
-- **Legal & insurance teams** — Quickly locate relevant clips for claims, investigations, and dispute resolution.
 
 ## Queries
 
