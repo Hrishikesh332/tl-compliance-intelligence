@@ -14,17 +14,7 @@ load_dotenv()
 log = logging.getLogger(__name__)
 
 PEGASUS_MODEL_ID = "twelvelabs.pegasus-1-2-v1:0"
-REGION_PREFIX = {
-    "us-east-1": "us",
-    "us-east-2": "us",
-    "us-west-1": "us",
-    "us-west-2": "us",
-    "eu-west-1": "eu",
-    "eu-central-1": "eu",
-    "ap-northeast-1": "apac",
-    "ap-northeast-2": "apac",
-    "ap-southeast-1": "apac",
-}
+REGION_PREFIX = {"us-east-1": "us"}
 
 _BEDROCK_RETRY_CONFIG = Config(
     retries={"max_attempts": 10, "mode": "adaptive"},

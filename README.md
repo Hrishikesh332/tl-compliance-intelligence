@@ -1,4 +1,4 @@
-<h1 align="center">Multi-Source Legal Evidence Investigator</h1>
+# Multi-Source Legal Evidence Investigator
 
 Ingest video from bodycams, CCTV, mobile, and dashcams to search timelines, track people, analyze footage, and surface compliance risks from a single intelligence layer.
 
@@ -21,10 +21,20 @@ The frontend is a Vite + React + Tailwind app. The backend is a Python/Flask API
 Everything you need for video compliance on top of TwelveLabs:
 
 🧠 **Video indexing & embedding** — Upload video assets and generate multimodal embeddings (visual + audio) using TwelveLabs Marengo for semantic search.
+
+
 🔍 **Natural language search** — Search inside videos with plain English and get timestamped results ranked by relevance.
+
+
 🧑‍💼 **Face‑based entity matching** — Register a face as an entity and find every video and clip where that person appears.
+
+
 📈 **Automated video analysis** — Per‑video reports including risk level, categories, detected objects, and transcript via TwelveLabs Pegasus.
+
+
 💬 **Conversational video Q&A** — Ask questions about any video and get answers with clickable timestamps to the relevant moment.
+
+
 🛡️ **Risk & compliance insights** — Surface safety hazards, violations, and risk scores, with people, objects, and transcript in a single dashboard.
 
 ---
@@ -49,6 +59,7 @@ Infrastructure and tooling:
 
 ### Frontend
 
+
 ![React](https://img.shields.io/badge/React-20232A?style=flat-square&logo=react&logoColor=61DAFB)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
 ![Vite](https://img.shields.io/badge/Vite-646CFF?style=flat-square&logo=vite&logoColor=white)
@@ -63,6 +74,7 @@ Infrastructure and tooling:
 ![Amazon_S3](https://img.shields.io/badge/Amazon_S3-569A31?style=flat-square&logo=amazons3&logoColor=white)
 ![Amazon_Bedrock](https://img.shields.io/badge/Amazon_Bedrock-232F3E?style=flat-square&logo=amazonaws&logoColor=white)
 ![FFmpeg](https://img.shields.io/badge/FFmpeg-007808?style=flat-square&logo=ffmpeg&logoColor=white)
+
 
 ---
 

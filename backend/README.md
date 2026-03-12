@@ -41,7 +41,8 @@ Example responses:
 
 Use these endpoints to upload source material, track indexing, and list what is available for downstream search and analysis.
 
-Initial Ingestion Workflow
+Initial Ingestion Workflow  
+[Initial ingestion workflow](src/architecture/Initial_indgestion_workflow.png)
 
 ### Video ingestion
 
@@ -106,7 +107,8 @@ Typical document upload response:
 
 These endpoints retrieve relevant videos, clips, and document chunks after ingestion is complete.
 
-Hybrid Search Workflow
+Hybrid Search Workflow  
+[Hybrid search workflow](src/architecture/hybrid_search_v2.png)
 
 ### Video and hybrid search
 
@@ -173,7 +175,8 @@ Typical hybrid search response:
 
 These endpoints generate structured intelligence from a video after it is indexed.
 
-Video Analysis Workflow
+Video Analysis Workflow  
+[Video analysis view 1](src/architecture/Analysis_1.png), [Video analysis view 2](src/architecture/Analysis_2.png)
 
 ### Structured video analysis
 
@@ -208,7 +211,8 @@ Typical analysis response:
 }
 ```
 
-Transcript Workflow
+Transcript Workflow  
+[Transcript workflow](src/architecture/transcript_workflow.png)
 
 ### Transcript
 
@@ -277,7 +281,8 @@ Key request and behavior notes:
 
 Use this endpoint to ask follow-up questions about a specific indexed video.
 
-Chat Analysis Workflow
+Chat Analysis Workflow  
+[Chat analysis workflow](src/architecture/chat_analysis.png)
 
 
 | Method | Path             | Purpose                                                                     |
@@ -315,7 +320,8 @@ Errors:
 
 These endpoints manage known people or other indexed entities and support entity-led search across videos.
 
-Entity Ingestion Workflow
+Entity Ingestion Workflow  
+[Entity ingestion workflow](src/architecture/entity_indgestion.png)
 
 ### Entity management
 
@@ -346,7 +352,8 @@ Typical create response:
 }
 ```
 
-Entity Search Workflow
+Entity Search Workflow  
+[Entity search workflow](src/architecture/Entity_Search.png)
 
 In the UI, entities are primarily used in two places:
 
