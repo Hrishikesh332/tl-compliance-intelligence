@@ -682,7 +682,48 @@ def api_video_insights(video_id: str):
 
     # ── POST: generate or override insights ──
     body = request.get_json(silent=True) or {}
+    mark_people_empty = bool(body.get("mark_people_empty"))
     mark_empty = bool(body.get("mark_empty"))
+    if mark_people_empty:
+        raw_insights = meta.get("video_insights") or {}
+        objects = list(raw_insights.get("objects") or [])
+        keyframes = list(raw_insights.get("keyframes") or [])
+        video_duration_sec = 0.0
+        try:
+            video_duration_sec = float(raw_insights.get("video_duration_sec") or 0.0)
+        except (TypeError, ValueError):
+            video_duration_sec = 0.0
+        if video_duration_sec <= 0:
+            try:
+                video_duration_sec = float(meta.get("duration_seconds") or 0.0)
+            except (TypeError, ValueError):
+                video_duration_sec = 0.0
+
+        people_empty_insights = {
+            "empty": False,
+            "objects_empty": len(objects) == 0,
+            "people_empty": True,
+            "objects": objects,
+            "detected_faces": [],
+            "people": [],
+            "mentioned": [],
+            "link_data_by_entity": {},
+            "keyframes": keyframes,
+            "video_duration_sec": video_duration_sec,
+        }
+        idx = vs_index()
+        for rec in idx:
+            if rec.get("id") == video_id:
+                m = rec.setdefault("metadata", {})
+                m["video_insights"] = people_empty_insights
+                m["insights_empty"] = False
+                m.pop("face_presence", None)
+                break
+        vs_save()
+        invalidate_video_cache()
+        log.info("[INSIGHTS] Marked people empty for video_id=%s", video_id)
+        return jsonify({"video_id": video_id, "insights": people_empty_insights, "status": "people_empty"}), 200
+
     if mark_empty:
         # Mark this video as analyzed-with-no-results so the frontend
         # treats insights as present but shows no people/objects.
