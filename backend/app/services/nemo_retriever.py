@@ -11,10 +11,6 @@ import numpy as np
 
 log = logging.getLogger("app.services.nemo_retriever")
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
 S3_BUCKET = os.environ.get("S3_BUCKET", "")
 S3_DOC_PREFIX = "documents"
 S3_DOC_INDEX_KEY = "document-index/nemo-docs.json"
@@ -503,10 +499,6 @@ def _split_into_semantic_chunks(file_path: str) -> list[tuple[str, str]]:
     return result
 
 
-# ---------------------------------------------------------------------------
-# NVIDIA embedding (nv-embedqa-e5-v5 via build.nvidia.com — NOT Marengo)
-# ---------------------------------------------------------------------------
-
 
 def _embed_client():
     from openai import OpenAI
@@ -573,9 +565,6 @@ def embed_query(query: str) -> list[float]:
     return _embed_via_requests([query[:EMBED_MAX_CHARS]], "query")[0]
 
 
-# ---------------------------------------------------------------------------
-# Document index operations
-# ---------------------------------------------------------------------------
 
 
 def add_chunks(
@@ -651,21 +640,16 @@ def list_docs() -> list[dict]:
     return list(seen.values())
 
 
-# ---------------------------------------------------------------------------
-# Top-level ingest orchestrator
-# ---------------------------------------------------------------------------
-
 
 def ingest_document(file_path: str, doc_id: str, filename: str) -> dict:
     """
     Full ingestion:
       1. Persist the PDF to S3 / local storage
       2. Match a video by filename and link it
-      3. Smart section-aware chunking (NeMo fallback for non-PDFs)
-      4. NVIDIA embedding
-      5. Store chunks with full metadata (PDF link + video link)
+      3. NVIDIA embedding
+      4. Store chunks with full metadata (PDF link + video link (if available))
     """
-    # -- 1. Persist the source PDF so it's retrievable later --
+
     extra: dict = {}
     try:
         pdf_info = _store_pdf(file_path, doc_id)
@@ -673,7 +657,6 @@ def ingest_document(file_path: str, doc_id: str, filename: str) -> dict:
     except Exception as exc:
         log.warning("Could not persist PDF for %s: %s", doc_id, exc)
 
-    # -- 2. Try to match a video in the index by name --
     try:
         video_match = _match_video_for_doc(filename)
         if video_match:
@@ -684,7 +667,6 @@ def ingest_document(file_path: str, doc_id: str, filename: str) -> dict:
     except Exception as exc:
         log.warning("Video matching failed for %s: %s", doc_id, exc)
 
-    # -- 3. Extract + chunk --
     ext = os.path.splitext(file_path)[1].lower()
     chunks: list[str] = []
     sections: list[str] = []
@@ -705,7 +687,6 @@ def ingest_document(file_path: str, doc_id: str, filename: str) -> dict:
         log.warning("No content extracted from %s", filename)
         return {"doc_id": doc_id, "chunks": 0, "status": "empty"}
 
-    # -- 4. Embed + store with metadata --
     embeddings = embed_texts(chunks)
     add_chunks(
         doc_id, filename, chunks, embeddings,

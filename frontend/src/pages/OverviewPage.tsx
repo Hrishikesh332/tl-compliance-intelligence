@@ -1,6 +1,5 @@
 import { Link } from 'react-router-dom'
 import logoMarkUrl from '../../strand/assets/logo-mark.svg?url'
-/* Strand UI: icons from design system */
 import searchIconUrl from '../../strand/icons/search.svg?url'
 import embedIconUrl from '../../strand/icons/embed.svg?url'
 import generateIconUrl from '../../strand/icons/generate.svg?url'
@@ -18,9 +17,6 @@ function IconArrowRight({ className = 'w-5 h-5' }: { className?: string }) {
     </svg>
   )
 }
-
-/* ── Data ──────────────────────────────────────────────────────────────── */
-
 const problems = [
   {
     iconUrl: warningIconUrl,
@@ -108,14 +104,10 @@ const useCases = [
     desc: 'Cross-reference claimant statements with video from multiple sources to verify incident details and detect potential fraud indicators.',
   },
 ]
-
-/* ── Page ──────────────────────────────────────────────────────────────── */
-
 export default function OverviewPage() {
   return (
     <div className="w-full">
 
-      {/* ─── Concise header ──────────────────────────────────────────── */}
       <section className="border-b border-border bg-surface">
         <div className="max-w-[1200px] mx-auto px-5 sm:px-8 py-6 sm:py-8">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -155,7 +147,6 @@ export default function OverviewPage() {
         </div>
       </section>
 
-      {/* ─── The Problem ─────────────────────────────────────────────── */}
       <section className="bg-background">
         <div className="max-w-[1200px] mx-auto px-5 sm:px-8 py-14 sm:py-20">
           <div className="text-center mb-10 sm:mb-14">
@@ -187,7 +178,6 @@ export default function OverviewPage() {
         </div>
       </section>
 
-      {/* ─── Features ────────────────────────────────────────────────── */}
       <section className="bg-surface border-t border-border">
         <div className="max-w-[1200px] mx-auto px-5 sm:px-8 py-8 sm:py-10">
           <div className="text-center mb-6 sm:mb-8">
@@ -218,7 +208,6 @@ export default function OverviewPage() {
         </div>
       </section>
 
-      {/* ─── Architecture Diagram ────────────────────────────────────── */}
       <section className="bg-background border-t border-border">
         <div className="max-w-[1200px] mx-auto px-5 sm:px-8 py-14 sm:py-20">
           <div className="text-center mb-8 sm:mb-10">
@@ -249,7 +238,6 @@ export default function OverviewPage() {
         </div>
       </section>
 
-      {/* ─── Demo Video ──────────────────────────────────────────────── */}
       <section id="demo-video" className="bg-surface border-t border-border">
         <div className="max-w-[1200px] mx-auto px-5 sm:px-8 py-14 sm:py-20">
           <div className="text-center mb-8 sm:mb-10">
@@ -290,7 +278,6 @@ export default function OverviewPage() {
         </div>
       </section>
 
-      {/* ─── Use Cases ───────────────────────────────────────────────── */}
       <section className="bg-surface border-t border-border">
         <div className="max-w-[1200px] mx-auto px-5 sm:px-8 py-14 sm:py-20">
           <div className="text-center mb-10 sm:mb-14">
@@ -342,7 +329,6 @@ export default function OverviewPage() {
         </div>
       </section>
 
-      {/* ─── How This App Helps ──────────────────────────────────────── */}
       <section className="bg-background border-t border-border">
         <div className="max-w-[1200px] mx-auto px-5 sm:px-8 py-14 sm:py-20">
           <div className="text-center mb-10 sm:mb-14">
@@ -376,7 +362,6 @@ export default function OverviewPage() {
         </div>
       </section>
 
-      {/* ─── Powered by TwelveLabs ───────────────────────────────────── */}
       <section className="border-t border-border bg-surface">
         <div className="max-w-[1200px] mx-auto px-5 sm:px-8 py-14 sm:py-20">
           <div className="flex flex-col lg:flex-row items-center gap-8 lg:gap-16">
@@ -416,8 +401,6 @@ export default function OverviewPage() {
                   </div>
                 ))}
               </div>
-
-              {/* AWS Infrastructure */}
               <div className="mt-4 rounded-xl border border-gray-200 bg-[#f9fafb] p-4">
                 <div className="flex items-center justify-center mb-3" aria-label="AWS">
                   <svg className="w-8 h-8 shrink-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 333334 199332" shapeRendering="geometricPrecision" textRendering="geometricPrecision" imageRendering="optimizeQuality" fillRule="evenodd" clipRule="evenodd" aria-hidden>
@@ -449,7 +432,6 @@ export default function OverviewPage() {
         </div>
       </section>
 
-      {/* ─── Footer CTA ──────────────────────────────────────────────── */}
       <section className="bg-surface border-t border-border">
         <div className="max-w-[1200px] mx-auto px-5 sm:px-8 py-10 sm:py-14 text-center">
           <h2 className="font-brand text-h5 sm:text-h4 font-medium text-text-primary">

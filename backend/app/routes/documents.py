@@ -1,9 +1,3 @@
-"""
-Document upload, listing, and search endpoints.
-
-Calls ONLY app.services.nemo_retriever — no imports from the video pipeline.
-"""
-
 import logging
 import mimetypes
 import os
@@ -27,10 +21,9 @@ log = logging.getLogger("app.routes.documents")
 
 documents_bp = Blueprint("documents", __name__)
 
-
+# Upload a document, store in S3, extract + embed via NeMo Retriever
 @documents_bp.route("/upload", methods=["POST"])
 def api_upload_document():
-    """Upload a document, store in S3, extract + embed via NeMo Retriever."""
     if "document" not in request.files:
         return jsonify({"error": "Missing 'document' file field"}), 400
 
@@ -76,10 +69,9 @@ def api_upload_document():
         log.error("Document upload/ingest failed: %s", exc, exc_info=True)
         return jsonify({"error": str(exc)}), 500
 
-
+# List all ingested documents with chunk counts
 @documents_bp.route("", methods=["GET"])
 def api_list_documents():
-    """List all ingested documents with chunk counts."""
     try:
         docs = list_docs()
         return jsonify({"documents": docs})
@@ -87,10 +79,10 @@ def api_list_documents():
         log.error("Failed to list documents: %s", exc, exc_info=True)
         return jsonify({"error": str(exc)}), 500
 
-
+# Semantic search over ingested documents
 @documents_bp.route("/search", methods=["POST"])
 def api_search_documents():
-    """Semantic search over ingested documents."""
+
     data = request.get_json(silent=True) or {}
     query = data.get("query", "").strip()
     if not query:
@@ -112,10 +104,10 @@ def api_search_documents():
         log.error("Document search failed: %s", exc, exc_info=True)
         return jsonify({"error": str(exc)}), 500
 
-
+# Serve an uploaded document file back to the browser (PDF inline, others as download)
 @documents_bp.route("/file/<doc_id>/<path:filename>", methods=["GET"])
 def api_serve_document(doc_id: str, filename: str):
-    """Serve an uploaded document file back to the browser (PDF inline, others as download)."""
+
     doc_id = (doc_id or "").strip()
     if not doc_id or ".." in doc_id or "/" in doc_id:
         return jsonify({"error": "Invalid doc_id"}), 400

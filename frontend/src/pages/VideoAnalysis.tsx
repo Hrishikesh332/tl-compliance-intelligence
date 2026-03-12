@@ -1623,12 +1623,18 @@ export default function VideoAnalysis() {
     })
   })()
 
+  const handleBackToSearch = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault()
+    window.location.href = '/dashboard'
+  }
+
   return (
     <div className="flex flex-col h-full">
       <div className="px-3 sm:px-6 pt-4 sm:pt-5 pb-3 flex flex-wrap items-center justify-between gap-3 shrink-0">
         <div className="flex items-center gap-2 sm:gap-3 text-sm min-w-0 flex-1">
           <Link
             to="/dashboard"
+            onClick={handleBackToSearch}
             className="inline-flex items-center gap-2 px-3 sm:px-4 py-2 rounded-full border border-border bg-surface text-sm font-medium text-text-secondary hover:border-accent hover:bg-accent/5 hover:text-text-primary transition-colors shrink-0 no-underline"
             aria-label="Back to search"
           >

@@ -23,8 +23,7 @@ search_bp = Blueprint("search", __name__)
 
 # ---------------------------------------------------------------------------
 #  Shared video-search helper (used by /videos and /hybrid)
-#  Entity search = search VIDEOS by entity: similarity only (Marengo embeddings),
-#  no ResNet / no face detection at search time.
+#  Entity search = search VIDEOS by entity - similarity only (Marengo embeddings),
 # ---------------------------------------------------------------------------
 
 
@@ -37,9 +36,10 @@ def _run_video_search(
 ) -> tuple[list[dict], str, str | None]:
     """Run the full video search pipeline and return (results, display_query, error).
 
-    Entity search (when entity_id(s) are provided): search VIDEOS only. Uses
-    precomputed Marengo embeddings: entity embedding vs video clip embeddings
-    (cosine similarity). No ResNet, no face detection, no frame extraction.
+    Entity search (when entity_id(s) are provided) - search VIDEOS only. 
+    
+    Uses precomputed Marengo embeddings - entity embedding vs video clip embeddings
+    (cosine similarity)
     """
     query_emb, display_query, is_entity_search, err = get_search_embedding_from_request(
         data,
@@ -61,7 +61,7 @@ def _run_video_search(
     clip_min_score = ENTITY_CLIP_MIN_SCORE if is_entity_search else None
 
     if is_entity_search:
-        # Video-only: rank by similarity (entity emb vs precomputed clip embs). No ResNet.
+        # Video-only - rank by similarity (entity emb vs precomputed clip embs). No ResNet.
         all_videos = index_list(type_filter="video")
         candidates = []
         for rec in all_videos:
@@ -195,7 +195,7 @@ def api_search_videos():
 
 
 # ---------------------------------------------------------------------------
-#  Hybrid search: videos + NeMo document chunks in one response
+#  Hybrid search - videos + NeMo document chunks in one response
 # ---------------------------------------------------------------------------
 
 

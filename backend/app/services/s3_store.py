@@ -26,10 +26,7 @@ _cached_s3_region: str | None = None
 
 
 def _s3():
-    """
-    Singleton S3 client with explicit timeouts/retries so uploads don't hang
-    indefinitely. Re-created only when AWS_REGION changes.
-    """
+
     global _cached_s3, _cached_s3_region
     region = os.environ.get("AWS_REGION", "us-east-1")
     if _cached_s3 is not None and _cached_s3_region == region:

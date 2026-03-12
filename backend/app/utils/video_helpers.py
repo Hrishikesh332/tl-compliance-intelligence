@@ -1456,14 +1456,12 @@ def face_match_score_in_video(
     return round(best_score, 6), merged[:15]
 
 
-# Minimum cosine similarity for a clip/face to count as "this person appears here".
-# Face-to-face matching tends to be more discriminative; keep threshold so only clear matches count.
+
 ENTITY_CLIP_MIN_SCORE = 0.48
 
-# Entity ranking: weight consistency (avg of top clips) and multiplicity (count)
-# so the video where the person actually appears ranks above one high-scoring outlier.
+
 ENTITY_RANK_TOP_K = 5  # number of top clip scores to average for consistency
-ENTITY_RANK_BEST_WEIGHT = 0.2   # weight for single best clip (low: one outlier shouldn't win)
+ENTITY_RANK_BEST_WEIGHT = 0.2   # weight for single best clip (low - one outlier shouldn't win)
 ENTITY_RANK_AVG_WEIGHT = 0.65  # weight for avg of top-k clips (consistency)
 ENTITY_RANK_COUNT_WEIGHT = 0.015  # per-clip boost, cap 15 clips
 ENTITY_RANK_COUNT_CAP = 15

@@ -8,7 +8,6 @@ import EntitiesPage from './pages/EntitiesPage'
 import Chatbot from './pages/Chatbot'
 import UploadMediaModal from './components/UploadMediaModal'
 import { VideoCacheProvider } from './contexts/VideoCache'
-/* Strand: logo and icons from design system (strand/assets, strand/icons) */
 import logoMarkUrl from '../strand/assets/logo-mark.svg?url'
 
 class ErrorBoundary extends Component<{ children: ReactNode; resetKey?: string }, { hasError: boolean; error: Error | null }> {
@@ -176,13 +175,11 @@ function Shell() {
               </span>
             </button>
 
-            {/* Desktop nav — hidden on mobile */}
             <nav className="hidden md:flex items-center gap-0.5">
               <NavLinks />
             </nav>
           </div>
 
-          {/* Hamburger — visible only on mobile */}
           <button
             type="button"
             onClick={() => setMobileMenuOpen((o) => !o)}
@@ -203,14 +200,12 @@ function Shell() {
             )}
           </button>
 
-          {/* Brand — right side on desktop, hidden when menu open on small screens */}
           <div className={`flex items-center gap-2 shrink-0 ${mobileMenuOpen ? 'max-md:hidden' : ''}`}>
             <img src={logoMarkUrl} alt="" className="h-7 w-auto" />
             <span className="font-brand text-lg font-semibold text-text-primary hidden sm:inline">TwelveLabs</span>
           </div>
         </header>
 
-        {/* Mobile menu dropdown */}
         <div
           className={`md:hidden absolute left-0 right-0 top-full z-50 bg-background border-b border-border shadow-lg transition-all duration-200 ease-out ${
             mobileMenuOpen ? 'opacity-100 visible' : 'opacity-0 invisible pointer-events-none'

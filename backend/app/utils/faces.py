@@ -31,9 +31,7 @@ EMBEDDING_CROP_SIZE = 384
 EMBEDDING_CROP_PADDING = 1.4
 ENTITY_FACE_MIN_CONFIDENCE = 0.72
 
-# Threshold for merging same person across frames/orientations. Lower = merge more (same person
-# front vs profile); higher = split more (different people stay separate). 0.76 reduces risk of
-# merging two distinct people (e.g. officer + driver) into one face.
+
 UNIQUE_FACE_COSINE_THRESHOLD = 0.76
 
 
@@ -177,11 +175,7 @@ def deduplicate_faces(
     face_records: list[dict],
     threshold: float = UNIQUE_FACE_COSINE_THRESHOLD,
 ) -> list[dict]:
-    """
-    Given a list of face dicts (each with 'embedding', 'confidence', 'image_base64', 'timestamp'),
-    deduplicate by cosine similarity on embeddings. Faces within `threshold` of an existing cluster
-    are merged (keeping the highest-confidence crop). Returns unique face clusters.
-    """
+
     if not face_records:
         return []
 

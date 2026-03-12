@@ -279,12 +279,6 @@ function TagPills({ tags }: { tags: string[] }) {
   )
 }
 
-/* ------------------------------------------------------------------ */
-/*  Category filters                                                   */
-/* ------------------------------------------------------------------ */
-
-// Category pills are driven by video tags. "All" shows everything.
-// The remaining entries should correspond to tags stored in video metadata.
 const CATEGORIES = ['All', 'BodyCam', 'DashCam', 'CCTV', 'Insurance Claim'] as const
 
 type TableEntity = { id: string; name: string; imageUrl?: string; initials: string }
@@ -417,10 +411,6 @@ function formatSecondsToTimestamp(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
-/* ------------------------------------------------------------------ */
-/*  Advanced Parameters Dropdown                                       */
-/* ------------------------------------------------------------------ */
-
 interface SearchOptions {
   visual: boolean
   audio: boolean
@@ -494,25 +484,21 @@ function AdvancedParamsDropdown({
           </div>
 
           <div className="space-y-3">
-            {/* Visual */}
             <button type="button" onClick={() => toggle('visual')} className="flex items-center gap-2.5 w-full text-left group">
               <IconCheckbox checked={options.visual} className="w-5 h-5 text-brand-charcoal" />
               <span className="text-sm font-medium text-text-secondary group-hover:text-text-primary">Visual</span>
             </button>
 
-            {/* Audio */}
             <button type="button" onClick={() => toggle('audio')} className="flex items-center gap-2.5 w-full text-left group">
               <IconCheckbox checked={options.audio} className="w-5 h-5 text-brand-charcoal" />
               <span className="text-sm font-medium text-text-secondary group-hover:text-text-primary">Audio</span>
             </button>
 
-            {/* Transcription */}
             <div>
               <button type="button" onClick={() => toggle('transcription')} className="flex items-center gap-2.5 w-full text-left group">
                 <IconCheckbox checked={options.transcription} className="w-5 h-5 text-brand-charcoal" />
                 <span className="text-sm font-medium text-text-secondary group-hover:text-text-primary">Transcription</span>
               </button>
-              {/* Sub-options */}
               <div className="ml-8 mt-2 space-y-2">
                 <button type="button" onClick={() => toggle('lexical')} className="flex items-center gap-2.5 w-full text-left group">
                   <IconCheckbox checked={options.lexical} className="w-5 h-5 text-brand-charcoal" />
@@ -543,10 +529,6 @@ function AdvancedParamsDropdown({
   )
 }
 
-/* ------------------------------------------------------------------ */
-/*  Document result card                                               */
-/* ------------------------------------------------------------------ */
-
 const VIDEO_ID_RE = /\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i
 
 function DocResultCard({ ext, filename, chunkIndex, text, scorePercent, docId }: {
@@ -576,9 +558,7 @@ function DocResultCard({ ext, filename, chunkIndex, text, scorePercent, docId }:
 
   return (
     <div className="group rounded-xl border border-border bg-surface hover:border-gray-400 transition-all duration-200 overflow-hidden">
-      {/* Header bar */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border/60 bg-card/40">
-        {/* File type icon */}
         <div className="w-9 h-9 rounded-lg bg-red-50 flex items-center justify-center mb-3">
           <svg
             viewBox="0 0 12 12"
@@ -598,7 +578,6 @@ function DocResultCard({ ext, filename, chunkIndex, text, scorePercent, docId }:
           </svg>
         </div>
 
-        {/* Title + meta */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold text-text-primary truncate">{filename}</span>
@@ -609,7 +588,6 @@ function DocResultCard({ ext, filename, chunkIndex, text, scorePercent, docId }:
           <span className="text-xs text-text-tertiary">Page {chunkIndex + 1}</span>
         </div>
 
-        {/* Relevance ring */}
         <div className="shrink-0 relative flex items-center justify-center w-11 h-11" title={`${scorePercent}% relevance`}>
           <svg width="44" height="44" viewBox="0 0 44 44" className="absolute inset-0">
             <circle cx="22" cy="22" r={r} fill="none" stroke="currentColor" strokeWidth="3" className="text-gray-200" />
@@ -625,7 +603,6 @@ function DocResultCard({ ext, filename, chunkIndex, text, scorePercent, docId }:
         </div>
       </div>
 
-      {/* Body */}
       <div className="px-4 py-3">
         <p className="text-[13px] leading-relaxed text-text-secondary whitespace-pre-wrap break-words">
           {expanded ? text : snippet}{!expanded && hasMore ? '…' : ''}
@@ -641,7 +618,6 @@ function DocResultCard({ ext, filename, chunkIndex, text, scorePercent, docId }:
         )}
       </div>
 
-      {/* Action bar */}
       <div className="flex items-center gap-2 px-4 py-2.5 border-t border-border/60 bg-card/30">
         {videoId && (
           <Link
@@ -685,13 +661,11 @@ function GroupedDocResultCard({ group }: { group: GroupedDocResult }) {
 
   return (
     <div className="group rounded-xl border border-border bg-surface hover:border-gray-400 transition-all duration-200 overflow-hidden">
-      {/* Header bar */}
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
         className="w-full flex items-center gap-3 px-4 py-3 border-b border-border/60 bg-card/40 text-left"
       >
-        {/* File type icon */}
         <div className="w-9 h-9 rounded-lg bg-red-50 flex items-center justify-center mb-3">
           <svg
             viewBox="0 0 12 12"
@@ -711,7 +685,6 @@ function GroupedDocResultCard({ group }: { group: GroupedDocResult }) {
           </svg>
         </div>
 
-        {/* Title + meta */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold text-text-primary truncate">{group.filename}</span>
@@ -746,7 +719,6 @@ function GroupedDocResultCard({ group }: { group: GroupedDocResult }) {
         </svg>
       </button>
 
-      {/* Body: list of chunks */}
       {expanded && (
         <div className="px-4 py-3 space-y-3 max-h-64 overflow-y-auto">
           {group.chunks.map((chunk) => (
@@ -767,7 +739,6 @@ function GroupedDocResultCard({ group }: { group: GroupedDocResult }) {
         </div>
       )}
 
-      {/* Action bar */}
       <div className="flex items-center gap-2 px-4 py-2.5 border-t border-border/60 bg-card/30">
         <a
           href={`${API_BASE}/api/documents/file/${group.docId}/${encodeURIComponent(group.filename)}`}
@@ -793,10 +764,6 @@ function GroupedDocResultCard({ group }: { group: GroupedDocResult }) {
     </div>
   )
 }
-
-/* ------------------------------------------------------------------ */
-/*  Dashboard                                                          */
-/* ------------------------------------------------------------------ */
 
 type DashboardProps = { onOpenUpload?: () => void }
 
@@ -1322,14 +1289,12 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
 
   return (
     <div className="w-full min-w-0">
-      {/* Search bar — vibrant gradient border, curved corners, rotating effect */}
       <div className="search-bar-gradient-outer mb-4 shadow-sm w-full min-w-0">
         <div className="search-bar-gradient-border-wrap">
           <div className="search-bar-gradient-border" aria-hidden />
         </div>
         <div className="search-bar-gradient-inner w-full">
           <div className="px-3 sm:px-4 pt-4 pb-2 min-w-0 w-full">
-            {/* Attachment chips + input on one line */}
             <div className="flex flex-wrap items-center gap-2 min-w-0">
               {searchAttachments.map((att) => (
                 <span
@@ -1516,7 +1481,6 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
         </div>
       </div>
 
-      {/* Search loading state — Strand-style loader */}
       {searchLoading && (
         <div className="mb-4 rounded-xl border border-border bg-surface px-4 py-3 flex items-center gap-3 shadow-sm" role="status" aria-live="polite">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--strand-product-search-light)] text-[var(--strand-product-search-dark)]">
@@ -1529,7 +1493,6 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
         </div>
       )}
 
-      {/* Search result summary + error */}
       {searchError && (
         <p className="mb-3 text-sm text-red-600" role="alert">
           {searchError}
@@ -1600,7 +1563,6 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
         </div>
       )}
 
-      {/* Category pills */}
       <div className="flex flex-wrap items-center gap-2 mb-5" role="group" aria-label="Category filter">
         {CATEGORIES.map((cat) => (
           <button
@@ -1619,10 +1581,8 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
         ))}
       </div>
 
-      {/* Tab switch + stats bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div className="flex flex-wrap items-center gap-3 sm:gap-4 min-w-0">
-          {/* Tab buttons */}
           <div className="flex items-center rounded-lg border border-border bg-surface p-0.5">
             <button
               type="button"
@@ -1650,7 +1610,6 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
             </button>
           </div>
 
-          {/* Stats */}
           <div className="flex items-center gap-x-3 flex-wrap">
             <div className="flex items-center gap-x-1">
               <svg className="h-5 w-5 text-gray-500 shrink-0" fill="none" viewBox="0 0 20 20" aria-hidden>
@@ -1681,7 +1640,6 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
         </div>
       </div>
 
-      {/* ─── Document results (NeMo Retriever) ─── */}
       {groupedDocResults && groupedDocResults.length > 0 && (
         <div
           className="mb-8"
@@ -1736,7 +1694,6 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
         </div>
       )}
 
-      {/* ─── Videos view ─── */}
       {viewMode === 'videos' && (
         <>
           <div className="dashboard-video-grid">
@@ -1789,7 +1746,6 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                   <div className="relative aspect-video rounded-xl overflow-hidden bg-brand-charcoal">
                     {(v.thumbnailDataUrl || v.thumbnailUrl) ? (
                       <>
-                        {/* Inline base64 blur — renders instantly with the card, no extra HTTP request */}
                         {v.thumbnailDataUrl && (
                           <img
                             src={v.thumbnailDataUrl}
@@ -1798,7 +1754,6 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
                             aria-hidden
                           />
                         )}
-                        {/* Full-res thumbnail loads on top; replaces blur once downloaded */}
                         {v.thumbnailUrl && (
                           <img
                             src={v.thumbnailUrl}
@@ -1905,7 +1860,6 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
         </>
       )}
 
-      {/* ─── Tabular view (data from video analysis metadata) ─── */}
       {viewMode === 'tabular' && (
         <>
           {videosForTable.length === 0 ? (
