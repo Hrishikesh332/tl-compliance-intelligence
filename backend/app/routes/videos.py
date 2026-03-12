@@ -85,7 +85,7 @@ def api_upload_video():
         return jsonify({"error": "Empty filename"}), 400
     video_bytes = file.read()
     size_mb = len(video_bytes) / (1024 * 1024)
-    log.info("Upload started: filename=%s size=%.1fMB", file.filename, size_mb)
+    log.info("Upload started: size=%.1fMB", size_mb)
     if len(video_bytes) > 300 * 1024 * 1024:
         log.warning("Upload rejected: file too large (%.1fMB)", size_mb)
         return jsonify({"error": "File exceeds 300 MB limit"}), 400
@@ -97,19 +97,19 @@ def api_upload_video():
 
     try:
         info = upload_video(video_bytes, file.filename)
-        log.info("S3 upload OK: video_id=%s s3_uri=%s", info["video_id"], info["s3_uri"])
+        log.info("S3 upload OK: video_id=%s", info["video_id"])
     except Exception as e:
-        log.error("S3 upload FAILED for %s: %s", file.filename, e, exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        log.error("S3 upload failed during /upload (%s)", type(e).__name__)
+        return jsonify({"error": "Internal server error"}), 500
 
     task_id = info["video_id"]
     thumbnail_s3_key = None
     if thumb_bytes:
         try:
             thumbnail_s3_key = upload_thumbnail(task_id, thumb_bytes)
-            log.info("Thumbnail uploaded: %s", thumbnail_s3_key)
+            log.info("Thumbnail uploaded for video_id=%s", task_id)
         except Exception as e:
-            log.warning("Thumbnail upload failed (non-fatal): %s", e)
+            log.warning("Thumbnail upload failed for video_id=%s (%s)", task_id, type(e).__name__)
 
     output_uri = f"{S3_EMBEDDINGS_OUTPUT}/{task_id}"
     meta = {
@@ -145,7 +145,7 @@ def api_upload_video():
     enqueue_bedrock_start(task_id, info["s3_uri"], output_uri, file.filename, meta)
 
     invalidate_video_cache()
-    log.info("Upload complete (queued for indexing): video_id=%s filename=%s", task_id, file.filename)
+    log.info("Upload complete (queued for indexing): video_id=%s", task_id)
     return jsonify({
         "task_id": task_id,
         "filename": file.filename,
@@ -198,7 +198,7 @@ def api_reindex_video(video_id: str):
     vs_save()
     enqueue_bedrock_start(video_id, s3_uri, output_uri, meta.get("filename", video_id), meta)
     invalidate_video_cache()
-    log.info("Reindex queued: video_id=%s filename=%s", video_id, meta.get("filename"))
+    log.info("Reindex queued: video_id=%s", video_id)
     return jsonify({
         "task_id": video_id,
         "filename": meta.get("filename", video_id),
@@ -407,7 +407,7 @@ def api_generate_video_analysis(video_id: str):
             "video_id": video_id,
         }), 400
     try:
-        log.info("[ANALYSIS] Calling Pegasus for video_id=%s s3_uri=%s", video_id, s3_uri)
+        log.info("[ANALYSIS] Calling Pegasus for video_id=%s", video_id)
         t0 = _time.perf_counter()
         raw_text = pegasus_analyze_video(
             s3_uri,
@@ -415,28 +415,23 @@ def api_generate_video_analysis(video_id: str):
             temperature=0,
         )
         log.info("[ANALYSIS] Pegasus response received in %.1fs (len=%d)", _time.perf_counter() - t0, len(raw_text or ""))
-        log.info("[ANALYSIS] ── RAW PEGASUS RESPONSE START ──\n%s", raw_text)
-        log.info("[ANALYSIS] ── RAW PEGASUS RESPONSE END ──")
         analysis_dict = parse_video_analysis_response(raw_text)
         if not analysis_dict:
             log.error("[ANALYSIS] Failed to parse Pegasus response as JSON for video_id=%s", video_id)
             return jsonify({
                 "error": "Could not parse analysis response as JSON",
                 "video_id": video_id,
-                "raw_preview": (raw_text[:500] + "..." if len(raw_text) > 500 else raw_text),
             }), 422
         log.info(
-            "[ANALYSIS] Parsed dict keys=%s title=%r categories_type=%s risks_len=%s transcript_len=%s",
+            "[ANALYSIS] Parsed dict keys=%s categories_type=%s risks_len=%s transcript_len=%s",
             list(analysis_dict.keys()),
-            (analysis_dict.get("title") or "")[:60],
             type(analysis_dict.get("categories")).__name__,
             len(analysis_dict.get("risks", [])) if isinstance(analysis_dict.get("risks"), list) else "N/A",
             len(analysis_dict.get("transcript", [])) if isinstance(analysis_dict.get("transcript"), list) else "N/A",
         )
         analysis = normalize_video_analysis(analysis_dict)
         log.info(
-            "[ANALYSIS] Parsed OK: title=%r categories=%d topics=%d risks=%d transcript_segments=%d riskLevel=%s",
-            analysis.get("title", "?")[:60],
+            "[ANALYSIS] Parsed OK: categories=%d topics=%d risks=%d transcript_segments=%d riskLevel=%s",
             len(analysis.get("categories", [])),
             len(analysis.get("topics", [])),
             len(analysis.get("risks", [])),
@@ -452,8 +447,8 @@ def api_generate_video_analysis(video_id: str):
         invalidate_video_cache()
         return jsonify({"video_id": video_id, "analysis": analysis})
     except Exception as e:
-        log.error("[ANALYSIS] FAILED for video_id=%s: %s", video_id, e, exc_info=True)
-        return jsonify({"error": str(e), "video_id": video_id}), 500
+        log.error("[ANALYSIS] Request failed for video_id=%s (%s)", video_id, type(e).__name__)
+        return jsonify({"error": "Internal server error", "video_id": video_id}), 500
 
 
 @videos_bp.route("/<video_id>/transcript", methods=["GET", "POST"])
@@ -513,7 +508,6 @@ def api_video_transcript(video_id: str):
             return jsonify({
                 "error": "Could not parse transcript from response",
                 "video_id": video_id,
-                "raw_preview": (raw[:500] + "..." if raw and len(raw) > 500 else raw or ""),
             }), 422
         log.info("[TRANSCRIPT] Parsed %d segments", len(new_segments))
         # If appending: keep existing segments before append_from_seconds, add new segments from that time onward
@@ -536,8 +530,8 @@ def api_video_transcript(video_id: str):
         invalidate_video_cache()
         return jsonify({"video_id": video_id, "transcript": transcript, "count": len(transcript)})
     except Exception as e:
-        log.error("[TRANSCRIPT] FAILED for video_id=%s: %s", video_id, e, exc_info=True)
-        return jsonify({"error": str(e), "video_id": video_id}), 500
+        log.error("[TRANSCRIPT] Request failed for video_id=%s (%s)", video_id, type(e).__name__)
+        return jsonify({"error": "Internal server error", "video_id": video_id}), 500
 
 
 @videos_bp.route("/<video_id>/frame", methods=["GET"])
@@ -575,8 +569,8 @@ def api_video_frame(video_id: str):
         return jsonify({"error": "Frame extraction timed out"}), 504
     except FileNotFoundError:
         return jsonify({"error": "ffmpeg not installed; install ffmpeg to use frame extraction"}), 503
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        return jsonify({"error": "Internal server error"}), 500
 
 
 @videos_bp.route("/<video_id>/faces/<int:face_id>", methods=["GET"])
@@ -739,7 +733,7 @@ def api_video_insights(video_id: str):
                 len(clip_list),
             )
         except Exception as e:
-            log.warning("[INSIGHTS] Could not load clips for duration (mark_empty): %s", e)
+            log.warning("[INSIGHTS] Could not load clips for duration while marking empty (%s)", type(e).__name__)
         if video_duration_sec <= 0:
             try:
                 video_duration_sec = float(meta.get("duration_seconds") or 0.0)
@@ -785,13 +779,10 @@ def api_video_insights(video_id: str):
         # ────────────────────────────────────────────────────
         # STEP 1 — Single Pegasus call: objects + face keyframes
         # ────────────────────────────────────────────────────
-        log.info("[INSIGHTS] Calling Pegasus DETECT_PROMPT for video_id=%s s3=%s", video_id, s3_uri)
+        log.info("[INSIGHTS] Calling Pegasus DETECT_PROMPT for video_id=%s", video_id)
         t0 = _time.perf_counter()
         raw_response = pegasus_analyze_video(s3_uri, DETECT_PROMPT)
-        log.info("[INSIGHTS] Pegasus raw response received in %.1fs (%d chars)", _time.perf_counter() - t0, len(raw_response or ""))
-        log.info("[INSIGHTS] ── RAW PEGASUS RESPONSE START ──")
-        log.info("%s", raw_response)
-        log.info("[INSIGHTS] ── RAW PEGASUS RESPONSE END ──")
+        log.info("[INSIGHTS] Pegasus response received in %.1fs (%d chars)", _time.perf_counter() - t0, len(raw_response or ""))
 
         detect_data = parse_detect_response(raw_response)
         objects_raw = detect_data["objects"]
@@ -826,9 +817,6 @@ def api_video_insights(video_id: str):
             out_objects.append(ob_copy)
 
         log.info("[OBJECTS] Final unique objects: %d", len(out_objects))
-        for ob in out_objects:
-            log.info("  -> %s at t=%ss", ob["object"], ob["timestamp"])
-
         # ────────────────────────────────────────────────────
         # STEP 3 — Video duration from clip embeddings
         # ────────────────────────────────────────────────────
@@ -840,7 +828,7 @@ def api_video_insights(video_id: str):
                 video_duration_sec = max(c.get("endSec", 0) for c in clip_list)
             log.info("[INSIGHTS] Video duration=%.1fs (%d clips)", video_duration_sec, len(clip_list))
         except Exception as e:
-            log.warning("[INSIGHTS] Could not load clips for duration: %s", e)
+            log.warning("[INSIGHTS] Could not load clips for duration (%s)", type(e).__name__)
         if video_duration_sec <= 0:
             video_duration_sec = 300.0
             log.info("[INSIGHTS] Using fallback duration=%.1fs", video_duration_sec)
@@ -975,12 +963,6 @@ def api_video_insights(video_id: str):
             })
 
         log.info("[FACES] Unique faces after dedup: %d (from %d detections)", len(detected_faces), len(all_face_detections))
-        for df in detected_faces:
-            log.info(
-                "  -> face#%s: conf=%.2f appearances=%d timestamps=%s",
-                df["face_id"], df["confidence"], df["appearance_count"], df["timestamps"],
-            )
-
         # ────────────────────────────────────────────────────
         # Build and persist insights (save to index without large base64 when on disk)
         # ────────────────────────────────────────────────────
@@ -1021,8 +1003,8 @@ def api_video_insights(video_id: str):
         )
         return jsonify({"video_id": video_id, "insights": insights})
     except Exception as e:
-        log.error("[INSIGHTS] FAILED for video_id=%s: %s", video_id, e, exc_info=True)
-        return jsonify({"error": str(e), "video_id": video_id}), 500
+        log.error("[INSIGHTS] Request failed for video_id=%s (%s)", video_id, type(e).__name__)
+        return jsonify({"error": "Internal server error", "video_id": video_id}), 500
 
 
 # Minimum cosine similarity to consider a frame face as matching a known face (for presence timeline).
@@ -1110,7 +1092,7 @@ def api_video_face_presence(video_id: str):
             video_duration_sec = max(c.get("endSec", 0) for c in clip_list)
             use_marengo = True
     except Exception as e:
-        log.debug("[FACE_PRESENCE] Marengo clips not available for video_id=%s: %s", video_id, e)
+        log.debug("[FACE_PRESENCE] Marengo clips not available for video_id=%s (%s)", video_id, type(e).__name__)
 
     n_segments = min(40, max(20, int(video_duration_sec / 3.0)))
     seg_dur = video_duration_sec / n_segments

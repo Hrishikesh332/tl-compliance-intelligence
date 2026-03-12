@@ -70,7 +70,7 @@ def _load_doc_index() -> list[dict]:
                 _doc_index = []
                 _doc_index_ts = time.monotonic()
             else:
-                log.warning("Failed to load doc index from S3: %s", exc)
+                log.warning("Failed to load doc index from S3 (%s)", type(exc).__name__)
             return _doc_index
 
     if _LOCAL_DOC_INDEX.exists():
@@ -98,7 +98,7 @@ def _save_doc_index() -> None:
             )
             _doc_index_ts = time.monotonic()
         except Exception as exc:
-            log.error("Failed to save doc index to S3: %s", exc)
+            log.error("Failed to save doc index to S3 (%s)", type(exc).__name__)
     else:
         _LOCAL_DOC_INDEX.parent.mkdir(parents=True, exist_ok=True)
         _LOCAL_DOC_INDEX.write_bytes(payload)
@@ -143,12 +143,12 @@ def upload_document(file_bytes: bytes, filename: str) -> dict:
 
     if _use_s3():
         _s3().put_object(Bucket=S3_BUCKET, Key=key, Body=file_bytes)
-        log.info("Uploaded document %s to s3://%s/%s", doc_id, S3_BUCKET, key)
+        log.info("Uploaded document %s to S3", doc_id)
     else:
         local_dir = _BACKEND_DIR / "data" / S3_DOC_PREFIX
         local_dir.mkdir(parents=True, exist_ok=True)
         (local_dir / f"{doc_id}{ext}").write_bytes(file_bytes)
-        log.info("Saved document %s locally at %s", doc_id, local_dir / f"{doc_id}{ext}")
+        log.info("Saved document %s locally", doc_id)
 
     return {"doc_id": doc_id, "s3_key": key, "filename": filename}
 
@@ -161,14 +161,14 @@ def _store_pdf(file_path: str, doc_id: str) -> dict:
 
     if _use_s3():
         _s3().put_object(Bucket=S3_BUCKET, Key=key, Body=file_bytes)
-        log.info("Stored PDF %s to s3://%s/%s", doc_id, S3_BUCKET, key)
+        log.info("Stored PDF %s to S3", doc_id)
         return {"pdf_s3_key": key, "pdf_s3_uri": f"s3://{S3_BUCKET}/{key}"}
 
     local_dir = _BACKEND_DIR / "data" / S3_DOC_PREFIX
     local_dir.mkdir(parents=True, exist_ok=True)
     dest = local_dir / f"{doc_id}{ext}"
     dest.write_bytes(file_bytes)
-    log.info("Stored PDF %s locally at %s", doc_id, dest)
+    log.info("Stored PDF %s locally", doc_id)
     return {"pdf_local_path": str(dest)}
 
 
@@ -236,10 +236,10 @@ def _ensure_pipeline() -> None:
             "which is not installed on this environment. For cloud deploy use the main "
             "requirements.txt; for local doc ingestion install: pip install -r requirements-optional.txt"
         )
-        log.warning("nv-ingest not available: %s", exc)
+        log.warning("nv-ingest not available (%s)", type(exc).__name__)
         raise RuntimeError(_NV_INGEST_UNAVAILABLE) from exc
     except Exception as exc:
-        log.error("Failed to start NeMo pipeline: %s", exc)
+        log.error("Failed to start NeMo pipeline (%s)", type(exc).__name__)
         raise
 
 
@@ -655,7 +655,7 @@ def ingest_document(file_path: str, doc_id: str, filename: str) -> dict:
         pdf_info = _store_pdf(file_path, doc_id)
         extra.update(pdf_info)
     except Exception as exc:
-        log.warning("Could not persist PDF for %s: %s", doc_id, exc)
+        log.warning("Could not persist PDF for %s (%s)", doc_id, type(exc).__name__)
 
     try:
         video_match = _match_video_for_doc(filename)
@@ -665,7 +665,7 @@ def ingest_document(file_path: str, doc_id: str, filename: str) -> dict:
         else:
             log.info("No matching video found for doc %s", doc_id)
     except Exception as exc:
-        log.warning("Video matching failed for %s: %s", doc_id, exc)
+        log.warning("Video matching failed for %s (%s)", doc_id, type(exc).__name__)
 
     ext = os.path.splitext(file_path)[1].lower()
     chunks: list[str] = []
@@ -676,15 +676,15 @@ def ingest_document(file_path: str, doc_id: str, filename: str) -> dict:
             pairs = _split_into_semantic_chunks(file_path)
             sections = [s for s, _ in pairs]
             chunks = [t for _, t in pairs]
-            log.info("Smart PDF chunking produced %d chunks from %s", len(chunks), filename)
+            log.info("Smart PDF chunking produced %d chunks for doc %s", len(chunks), doc_id)
         except Exception as exc:
-            log.warning("Smart PDF extraction failed for %s, falling back to NeMo: %s", filename, exc)
+            log.warning("Smart PDF extraction failed for doc %s, falling back to NeMo (%s)", doc_id, type(exc).__name__)
 
     if not chunks:
         chunks = extract_document(file_path)
 
     if not chunks:
-        log.warning("No content extracted from %s", filename)
+        log.warning("No content extracted for doc %s", doc_id)
         return {"doc_id": doc_id, "chunks": 0, "status": "empty"}
 
     embeddings = embed_texts(chunks)

@@ -25,5 +25,5 @@ def api_ask_video():
         full_prompt = f"{ASK_VIDEO_SYSTEM_PROMPT}\n\nUser question: {message}"
         answer = pegasus_analyze_video(s3_uri, full_prompt)
         return jsonify({"answer": answer, "video_id": video_id})
-    except Exception as e:
-        return jsonify({"error": str(e), "video_id": video_id}), 500
+    except Exception:
+        return jsonify({"error": "Internal server error", "video_id": video_id}), 500

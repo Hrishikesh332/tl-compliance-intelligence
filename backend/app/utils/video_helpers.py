@@ -113,7 +113,7 @@ def _bedrock_worker():
             try:
                 result = start_video_embedding(s3_uri, output_uri)
                 arn = result.get("invocation_arn", "")
-                log.info("[QUEUE] Bedrock started: %s -> arn=%s", filename, arn[:80])
+                log.info("[QUEUE] Bedrock started for task_id=%s", task_id)
 
                 _tasks[task_id]["status"] = "indexing"
                 _tasks[task_id]["invocation_arn"] = arn
@@ -142,7 +142,7 @@ def _bedrock_worker():
                     log.warning("[QUEUE] %s throttled (attempt %d/%d), retry in %.1fs", filename, attempt, max_retries, delay)
                     _time.sleep(delay)
                     continue
-                log.error("[QUEUE] Bedrock start FAILED for %s: %s", filename, exc)
+                log.error("[QUEUE] Bedrock start failed for task_id=%s (%s)", task_id, type(exc).__name__)
                 _tasks[task_id]["status"] = "failed"
                 _tasks[task_id]["error"] = msg
                 for rec in vs_index():
@@ -199,7 +199,7 @@ def _bedrock_poller():
                                         break
                                 vs_save()
                     except Exception as exc:
-                        log.warning("[POLLER] Failed to load embeddings for %s: %s", task_id, exc)
+                        log.warning("[POLLER] Failed to load embeddings for %s (%s)", task_id, type(exc).__name__)
                     if task_id in _tasks:
                         _tasks[task_id]["status"] = "ready"
                     invalidate_video_cache()
@@ -222,7 +222,7 @@ def _bedrock_poller():
                     log.warning("[POLLER] Timed out waiting for %s (%.0fs)", task_id, elapsed)
                     done_ids.append(task_id)
             except Exception as exc:
-                log.debug("[POLLER] Error polling %s: %s", task_id, exc)
+                log.debug("[POLLER] Error polling %s (%s)", task_id, type(exc).__name__)
 
         if done_ids:
             with _poller_lock:
@@ -244,10 +244,10 @@ def save_face_to_disk(video_id: str, face_id: int, image_base64: str) -> str | N
         filename = f"face_{face_id}.png"
         path = cache_dir / filename
         path.write_bytes(base64.b64decode(image_base64))
-        log.info("[CACHE] Saved face to %s", path)
+        log.info("[CACHE] Saved face cache for video_id=%s face_id=%s", video_id, face_id)
         return filename
     except Exception as e:
-        log.warning("[CACHE] Failed to save face %s for video %s: %s", face_id, video_id, e)
+        log.warning("[CACHE] Failed to save face %s for video %s (%s)", face_id, video_id, type(e).__name__)
         return None
 
 
@@ -261,7 +261,7 @@ def load_face_from_disk(video_id: str, face_filename: str) -> str | None:
             return None
         return base64.b64encode(path.read_bytes()).decode("utf-8")
     except Exception as e:
-        log.warning("[CACHE] Failed to load face %s for video %s: %s", face_filename, video_id, e)
+        log.warning("[CACHE] Failed to load face %s for video %s (%s)", face_filename, video_id, type(e).__name__)
         return None
 
 
@@ -296,10 +296,10 @@ def save_object_frame_to_disk(video_id: str, object_label: str, timestamp: int |
         filename = f"{slug}_{ts}.jpg"
         path = cache_dir / filename
         path.write_bytes(compressed)
-        log.info("[CACHE] Saved object frame to %s (%d bytes)", path, len(compressed))
+        log.info("[CACHE] Saved object frame cache for video_id=%s (%d bytes)", video_id, len(compressed))
         return filename
     except Exception as e:
-        log.warning("[CACHE] Failed to save object frame for video %s: %s", video_id, e)
+        log.warning("[CACHE] Failed to save object frame for video %s (%s)", video_id, type(e).__name__)
         return None
 
 
@@ -313,7 +313,7 @@ def load_object_frame_from_disk(video_id: str, filename: str) -> bytes | None:
             return None
         return path.read_bytes()
     except Exception as e:
-        log.warning("[CACHE] Failed to load object frame %s for video %s: %s", filename, video_id, e)
+        log.warning("[CACHE] Failed to load object frame %s for video %s (%s)", filename, video_id, type(e).__name__)
         return None
 
 
@@ -338,7 +338,7 @@ def make_tiny_thumbnail_b64(jpeg_bytes: bytes) -> str | None:
         img.save(buf, format="JPEG", quality=40, optimize=True)
         return base64.b64encode(buf.getvalue()).decode("ascii")
     except Exception as e:
-        log.debug("make_tiny_thumbnail_b64 failed: %s", e)
+        log.debug("make_tiny_thumbnail_b64 failed (%s)", type(e).__name__)
         return None
 
 
@@ -801,7 +801,7 @@ def parse_video_analysis_response(text: str) -> dict | None:
                     return obj
                 log.warning("[PARSE] Strategy '%s' parsed OK but missing required keys, trying next…", label)
         except json.JSONDecodeError as exc:
-            log.debug("[PARSE] Strategy '%s' failed: %s", label, exc)
+            log.debug("[PARSE] Strategy '%s' failed (%s)", label, type(exc).__name__)
 
     for label, candidate in strategies:
         try:
@@ -936,7 +936,7 @@ def extract_duration_and_thumbnail(video_bytes: bytes) -> tuple[float | None, by
         if thumb_result.returncode == 0 and thumb_result.stdout:
             thumb = thumb_result.stdout
     except Exception as e:
-        log.warning("extract_duration_and_thumbnail failed: %s", e)
+        log.warning("extract_duration_and_thumbnail failed (%s)", type(e).__name__)
     finally:
         if tmp_path:
             try:
@@ -949,7 +949,6 @@ def extract_duration_and_thumbnail(video_bytes: bytes) -> tuple[float | None, by
 def get_frame_bytes(video_id: str, t: float) -> bytes | None:
     url = video_id_to_presigned_url(video_id)
     if not url or t < 0:
-        log.debug("get_frame_bytes: no url or invalid t=%.1f for video_id=%s", t, video_id)
         return None
     try:
         t0 = _time.perf_counter()
@@ -962,11 +961,9 @@ def get_frame_bytes(video_id: str, t: float) -> bytes | None:
             timeout=120,
             check=False,
         )
-        elapsed = _time.perf_counter() - t0
         if result.returncode == 0 and result.stdout:
-            log.debug("Frame extracted: video_id=%s t=%.1f size=%d bytes (%.1fs)", video_id, t, len(result.stdout), elapsed)
             return result.stdout
-        log.warning("ffmpeg failed for video_id=%s t=%.1f rc=%d stderr=%s", video_id, t, result.returncode, (result.stderr or b"")[:200])
+        log.warning("ffmpeg failed for video_id=%s t=%.1f rc=%d", video_id, t, result.returncode)
     except subprocess.TimeoutExpired:
         log.warning("ffmpeg timed out for video_id=%s t=%.1f", video_id, t)
     except FileNotFoundError:
@@ -998,7 +995,6 @@ def is_frame_blurred(frame_bytes: bytes, threshold: float = BLUR_VARIANCE_THRESH
 def get_face_from_video_frames(video_id: str, clips: list[dict]) -> str | None:
     from app.utils.faces import detect_and_crop_faces
     if not clips:
-        log.debug("get_face_from_video_frames: no clips for video_id=%s", video_id)
         return None
     timestamps_to_try: list[float] = []
     for clip in clips[:3]:
@@ -1008,13 +1004,11 @@ def get_face_from_video_frames(video_id: str, clips: list[dict]) -> str | None:
         for frac in (0.2, 0.5, 0.8):
             t = start + duration * frac
             timestamps_to_try.append(t)
-    log.debug("get_face_from_video_frames: trying %d timestamps for video_id=%s", len(timestamps_to_try), video_id)
     for t in timestamps_to_try:
         frame_bytes = get_frame_bytes(video_id, t)
         if not frame_bytes:
             continue
         if is_frame_blurred(frame_bytes, threshold=FACE_BLUR_VARIANCE_THRESHOLD):
-            log.debug("Skipping blurred frame at t=%.1f", t)
             continue
         try:
             faces = detect_and_crop_faces(frame_bytes, output_size=256)
@@ -1022,7 +1016,7 @@ def get_face_from_video_frames(video_id: str, clips: list[dict]) -> str | None:
                 log.info("Face found in video frame at t=%.1f (confidence=%.4f)", t, faces[0]["confidence"])
                 return faces[0].get("image_base64")
         except Exception as e:
-            log.warning("Face detection failed at t=%.1f: %s", t, e)
+            log.warning("Face detection failed at t=%.1f (%s)", t, type(e).__name__)
             continue
     log.info("No face found in video_id=%s across %d timestamps", video_id, len(timestamps_to_try))
     return None
@@ -1100,7 +1094,7 @@ def parse_detect_response(text: str) -> dict:
     Returns {"objects": [...], "face_keyframes": [...]}.
     """
     raw = (text or "").strip()
-    log.info("[DETECT_PARSE] Raw Pegasus response (%d chars):\n%s", len(raw), raw)
+    log.info("[DETECT_PARSE] Processing Pegasus response (%d chars)", len(raw))
 
     # Try to extract JSON object from the response
     m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw)
@@ -1183,11 +1177,6 @@ def parse_detect_response(text: str) -> dict:
                     pass
 
     log.info("[DETECT_PARSE] Parsed: %d objects, %d face_keyframes", len(objects), len(face_keyframes))
-    for o in objects:
-        log.info("  [OBJ] %s at t=%ss", o["object"], o["timestamp"])
-    for kf in face_keyframes:
-        log.info("  [FACE_KF] t=%ss — %s", kf["timestamp"], kf["description"])
-
     return {"objects": objects, "face_keyframes": face_keyframes}
 
 
@@ -1419,7 +1408,6 @@ def face_match_score_in_video(
                 face_emb = embed_image(media)
                 sim = _cosine(entity_emb, face_emb)
                 faces_compared += 1
-                log.debug("Face at t=%.1f: sim=%.4f conf=%.3f", t, sim, face["confidence"])
                 if sim > best_score:
                     best_score = sim
                 if sim >= ENTITY_CLIP_MIN_SCORE:
@@ -1432,7 +1420,7 @@ def face_match_score_in_video(
                 if best_score >= 0.72 and len(matching_clips) >= 2:
                     break
         except Exception as e:
-            log.warning("Face compare failed at t=%.1f: %s", t, e)
+            log.warning("Face compare failed at t=%.1f (%s)", t, type(e).__name__)
             continue
         if best_score >= 0.72 and len(matching_clips) >= 2:
             break
@@ -1511,7 +1499,7 @@ def extract_unique_faces_from_video(
         else:
             video_end = 300.0
     except Exception as e:
-        log.warning("Could not load clips for duration estimate: %s", e)
+        log.warning("Could not load clips for duration estimate (%s)", type(e).__name__)
         video_end = 300.0
 
     if video_end <= 0:
@@ -1531,10 +1519,8 @@ def extract_unique_faces_from_video(
         if not frame_bytes:
             continue
         if is_frame_blurred(frame_bytes):
-            log.debug("Skipping blurred frame at t=%.1f", t)
             continue
         faces = detect_and_crop_faces(frame_bytes, output_size=256, min_confidence=face_min_confidence)
-        log.debug("t=%.1f: detected %d faces", t, len(faces))
         for face in faces:
             emb = embed_face_crop(face)
             if emb is None:

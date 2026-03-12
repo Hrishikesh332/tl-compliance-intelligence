@@ -15,8 +15,8 @@ def api_index_add():
         if text:
             try:
                 embedding = embed_text(text)
-            except Exception as e:
-                return jsonify({"error": str(e)}), 500
+            except Exception:
+                return jsonify({"error": "Internal server error"}), 500
         else:
             return jsonify({"error": "Provide 'embedding' or 'text'"}), 400
     id_ = data.get("id")

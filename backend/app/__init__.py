@@ -136,11 +136,11 @@ def _self_ping_health(app: Flask, *, timeout_seconds: float) -> None:
             headers={"User-Agent": "video-compliance-self-ping/1.0"},
         )
         if response.ok:
-            app.logger.info("Self-ping OK: %s -> %s", health_url, response.status_code)
+            app.logger.info("Self-ping OK (%s)", response.status_code)
         else:
-            app.logger.warning("Self-ping returned %s for %s", response.status_code, health_url)
+            app.logger.warning("Self-ping returned %s", response.status_code)
     except Exception as exc:
-        app.logger.warning("Self-ping failed for %s: %s", health_url, exc)
+        app.logger.warning("Self-ping failed (%s)", type(exc).__name__)
 
 
 def _configure_self_ping_scheduler(app: Flask) -> None:
@@ -162,8 +162,6 @@ def _configure_self_ping_scheduler(app: Flask) -> None:
         interval_minutes = max(float(os.getenv("SELF_PING_INTERVAL_MINUTES", "9")), 1.0)
         timeout_seconds = max(float(os.getenv("SELF_PING_TIMEOUT_SECONDS", "10")), 1.0)
         start_delay_seconds = max(float(os.getenv("SELF_PING_START_DELAY_SECONDS", "30")), 0.0)
-        base_url = _get_self_ping_base_url()
-
         scheduler = BackgroundScheduler(timezone="UTC")
         scheduler.add_job(
             _self_ping_health,
@@ -181,11 +179,7 @@ def _configure_self_ping_scheduler(app: Flask) -> None:
         atexit.register(lambda: scheduler.shutdown(wait=False))
         _self_ping_scheduler = scheduler
 
-        app.logger.info(
-            "Self-ping scheduler started for %s every %.1f minutes",
-            base_url,
-            interval_minutes,
-        )
+        app.logger.info("Self-ping scheduler started (every %.1f minutes)", interval_minutes)
         app.logger.info(
             "Note: in-process self-ping cannot wake a Render free instance after it has already spun down"
         )
@@ -320,7 +314,11 @@ def _warmup_video_list(app: Flask) -> None:
                                             updates.get("duration_seconds", "skip"),
                                             "yes" if updates.get("thumbnail_base64") else "skip")
                     except Exception as exc:
-                        app.logger.warning("Warmup backfill failed for %s: %s", meta.get("filename", vid_id), exc)
+                        app.logger.warning(
+                            "Warmup backfill failed for %s (%s)",
+                            meta.get("filename", vid_id),
+                            type(exc).__name__,
+                        )
                     finally:
                         if tmp_path:
                             try:
@@ -360,7 +358,7 @@ def _warmup_video_list(app: Flask) -> None:
             set_video_list_cache(result)
             app.logger.info("Warmup: video list cache primed (%d videos)", len(entries))
         except Exception as exc:
-            app.logger.debug("Warmup video list skipped: %s", exc)
+            app.logger.debug("Warmup video list skipped (%s)", type(exc).__name__)
 
 
 def _update_index_meta(idx: list, vid_id: str, updates: dict) -> None:

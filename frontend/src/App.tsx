@@ -23,8 +23,8 @@ class ErrorBoundary extends Component<{ children: ReactNode; resetKey?: string }
     }
   }
 
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error('[ErrorBoundary]', error, info.componentStack)
+  componentDidCatch(_error: Error, _info: ErrorInfo) {
+    console.error('[ErrorBoundary] Unhandled UI error')
   }
 
   render() {

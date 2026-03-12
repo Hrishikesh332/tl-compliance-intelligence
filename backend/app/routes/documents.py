@@ -66,8 +66,8 @@ def api_upload_document():
         })
 
     except Exception as exc:
-        log.error("Document upload/ingest failed: %s", exc, exc_info=True)
-        return jsonify({"error": str(exc)}), 500
+        log.error("Document upload/ingest failed (%s)", type(exc).__name__)
+        return jsonify({"error": "Internal server error"}), 500
 
 # List all ingested documents with chunk counts
 @documents_bp.route("", methods=["GET"])
@@ -76,8 +76,8 @@ def api_list_documents():
         docs = list_docs()
         return jsonify({"documents": docs})
     except Exception as exc:
-        log.error("Failed to list documents: %s", exc, exc_info=True)
-        return jsonify({"error": str(exc)}), 500
+        log.error("Failed to list documents (%s)", type(exc).__name__)
+        return jsonify({"error": "Internal server error"}), 500
 
 # Semantic search over ingested documents
 @documents_bp.route("/search", methods=["POST"])
@@ -101,8 +101,8 @@ def api_search_documents():
             "results": results,
         })
     except Exception as exc:
-        log.error("Document search failed: %s", exc, exc_info=True)
-        return jsonify({"error": str(exc)}), 500
+        log.error("Document search failed (%s)", type(exc).__name__)
+        return jsonify({"error": "Internal server error"}), 500
 
 # Serve an uploaded document file back to the browser (PDF inline, others as download)
 @documents_bp.route("/file/<doc_id>/<path:filename>", methods=["GET"])
@@ -125,7 +125,7 @@ def api_serve_document(doc_id: str, filename: str):
             disposition = "inline" if ext == ".pdf" else f'attachment; filename="{filename}"'
             return Response(body, mimetype=mime, headers={"Content-Disposition": disposition})
         except Exception as exc:
-            log.warning("Failed to fetch document from S3: %s", exc)
+            log.warning("Failed to fetch document from S3 (%s)", type(exc).__name__)
             return jsonify({"error": "Document file not found"}), 404
     else:
         from pathlib import Path

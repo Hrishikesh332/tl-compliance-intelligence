@@ -16,11 +16,11 @@ _MODEL_DIR = Path(__file__).resolve().parent.parent.parent / "models"
 _PROTOTXT = _MODEL_DIR / "deploy.prototxt"
 _CAFFEMODEL = _MODEL_DIR / "res10_300x300_ssd_iter_140000.caffemodel"
 
-log.info("Loading ResNet10 SSD face detector from %s", _MODEL_DIR)
+log.info("Loading ResNet10 SSD face detector")
 if not _PROTOTXT.exists():
-    log.error("MISSING prototxt: %s", _PROTOTXT)
+    log.error("Missing face detector prototxt")
 if not _CAFFEMODEL.exists():
-    log.error("MISSING caffemodel: %s", _CAFFEMODEL)
+    log.error("Missing face detector caffemodel")
 
 face_detector_net = cv2.dnn.readNetFromCaffe(str(_PROTOTXT), str(_CAFFEMODEL))
 log.info("ResNet10 SSD face detector loaded OK")
@@ -147,7 +147,7 @@ def embed_face_crop(face: dict) -> list[float] | None:
         media = media_source_base64(face_bytes)
         return embed_image(media)
     except Exception as e:
-        log.warning("Failed to embed face crop: %s", e)
+        log.warning("Failed to embed face crop (%s)", type(e).__name__)
         return None
 
 

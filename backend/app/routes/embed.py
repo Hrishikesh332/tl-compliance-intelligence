@@ -15,8 +15,8 @@ def api_embed_text():
     try:
         embedding = embed_text(text.strip())
         return jsonify({"embedding": embedding, "indexId": FIXED_INDEX_ID})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        return jsonify({"error": "Internal server error"}), 500
 
 
 @embed_bp.route("/image", methods=["POST"])
@@ -41,8 +41,8 @@ def api_embed_image():
     try:
         embedding = embed_image(media)
         return jsonify({"embedding": embedding, "indexId": FIXED_INDEX_ID})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        return jsonify({"error": "Internal server error"}), 500
 
 
 @embed_bp.route("/text-image", methods=["POST"])
@@ -68,5 +68,5 @@ def api_embed_text_image():
     try:
         embedding = embed_text_image(text.strip(), media)
         return jsonify({"embedding": embedding, "indexId": FIXED_INDEX_ID})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        return jsonify({"error": "Internal server error"}), 500

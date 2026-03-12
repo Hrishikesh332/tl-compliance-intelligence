@@ -46,7 +46,7 @@ def _run_video_search(
         request_query=request_query,
         image_bytes=image_bytes,
     )
-    log.info("[SEARCH] type=%s query=%r", "entity" if is_entity_search else "text", display_query or "(none)")
+    log.info("[SEARCH] type=%s", "entity" if is_entity_search else "text")
     if err or not query_emb:
         return [], display_query or "", err or "Could not get search embedding"
 
@@ -144,7 +144,7 @@ def _run_video_search(
             "clips": clips,
         })
 
-    log.info("[SEARCH] Returning %d video results for query=%r", len(out), display_query)
+    log.info("[SEARCH] Returning %d video results", len(out))
     return out, display_query, None
 
 
@@ -152,7 +152,7 @@ def _run_document_search(text_query: str, doc_top_k: int) -> list[dict]:
     from app.services.nemo_retriever import embed_query, search_docs
 
     t0 = _time.perf_counter()
-    log.info("[DOC_SEARCH] Started text query=%r top_k=%d", text_query, doc_top_k)
+    log.info("[DOC_SEARCH] Started doc search top_k=%d", doc_top_k)
     query_emb = embed_query(text_query)
     docs = search_docs(query_emb, top_k=doc_top_k)
     log.info(
@@ -181,7 +181,7 @@ def api_search_videos():
             image_bytes=image_bytes,
         )
         if err:
-            log.warning("[SEARCH] Embedding error: %s", err)
+            log.warning("[SEARCH] Request rejected during embedding validation")
             return jsonify({"error": err}), 400
         return jsonify({
             "indexId": FIXED_INDEX_ID,
@@ -190,8 +190,8 @@ def api_search_videos():
             "results": video_results,
         })
     except Exception as e:
-        log.error("[SEARCH] FAILED: %s", e, exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        log.error("[SEARCH] Request failed (%s)", type(e).__name__)
+        return jsonify({"error": "Internal server error"}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +216,7 @@ def api_search_hybrid():
     video_results: list[dict] = []
     display_query = text_query
     video_error: str | None = None
+    video_error_status = 400
     doc_results: list[dict] = []
     doc_error: str | None = None
 
@@ -236,23 +237,24 @@ def api_search_hybrid():
         try:
             video_results, display_query, video_error = video_future.result()
         except Exception as e:
-            log.error("[HYBRID] Video search failed: %s", e, exc_info=True)
-            video_error = str(e)
+            log.error("[HYBRID] Video search failed (%s)", type(e).__name__)
+            video_error = "Video search failed"
+            video_error_status = 500
 
         if doc_future is not None:
             try:
                 doc_results = doc_future.result()
             except Exception as e:
-                log.error("[HYBRID] Document search failed: %s", e, exc_info=True)
-                doc_error = str(e)
+                log.error("[HYBRID] Document search failed (%s)", type(e).__name__)
+                doc_error = "Document search unavailable"
 
     if video_error:
-        log.warning("[HYBRID] Video search error (non-fatal): %s", video_error)
+        log.warning("[HYBRID] Video search returned an error without document impact")
 
     # If video search had an embedding error and there are no doc results
     # either, surface that error to the client.
     if video_error and not video_results and not doc_results:
-        return jsonify({"error": video_error}), 400
+        return jsonify({"error": video_error}), video_error_status
 
     resp: dict = {
         "query": display_query,
@@ -265,8 +267,8 @@ def api_search_hybrid():
         resp["doc_error"] = doc_error
 
     log.info(
-        "[HYBRID] Returning %d video(s) + %d doc(s) for query=%r total=%.1fms",
-        len(video_results), len(doc_results), display_query, (_time.perf_counter() - hybrid_t0) * 1000,
+        "[HYBRID] Returning %d video(s) + %d doc(s) total=%.1fms",
+        len(video_results), len(doc_results), (_time.perf_counter() - hybrid_t0) * 1000,
     )
     return jsonify(resp)
 
@@ -286,8 +288,8 @@ def api_search_entity():
         embedding = embed_text(query.strip())
         results = index_search(embedding, top_k=top_k, type_filter=type_filter or "entity", metadata_filter=metadata_filter)
         return jsonify({"indexId": FIXED_INDEX_ID, "results": results})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        return jsonify({"error": "Internal server error"}), 500
 
 
 @search_bp.route("/image", methods=["POST"])
@@ -320,5 +322,5 @@ def api_search_image():
         embedding = embed_image(media)
         results = index_search(embedding, top_k=top_k, type_filter=type_filter or None, metadata_filter=metadata_filter)
         return jsonify({"indexId": FIXED_INDEX_ID, "results": results})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        return jsonify({"error": "Internal server error"}), 500

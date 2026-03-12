@@ -21,11 +21,9 @@ def detect_faces():
     output_size = request.args.get("size", 256, type=int)
     output_size = max(64, min(output_size, 1024))
     image_bytes = file.read()
-    log.info("[FACES] detect-faces: filename=%s image_size=%d output_size=%d", file.filename, len(image_bytes), output_size)
+    log.info("[FACES] detect-faces: image_size=%d output_size=%d", len(image_bytes), output_size)
     faces = detect_and_crop_faces(image_bytes, output_size=output_size)
     log.info("[FACES] Detected %d faces (ResNet10 SSD)", len(faces))
-    for f in faces:
-        log.info("  -> confidence=%.4f bbox=%s", f["confidence"], f["bbox"])
     return jsonify({"count": len(faces), "faces": faces})
 
 
@@ -37,7 +35,7 @@ def detect_first_face():
     output_size = request.args.get("size", 256, type=int)
     output_size = max(64, min(output_size, 1024))
     image_bytes = file.read()
-    log.info("[FACES] detect-faces/first: filename=%s image_size=%d", file.filename or "?", len(image_bytes))
+    log.info("[FACES] detect-faces/first: image_size=%d", len(image_bytes))
     faces = detect_and_crop_faces(image_bytes, output_size=output_size)
     if not faces:
         log.warning("[FACES] No faces detected in uploaded image")

@@ -77,7 +77,7 @@ def upload_video(file_bytes: bytes, filename: str) -> dict:
     content_type = "video/mp4"
     try:
         size = len(file_bytes)
-        log.info("Uploading video to S3 (multipart): bucket=%s key=%s bytes=%d", S3_BUCKET, key, size)
+        log.info("Uploading video to S3 (multipart): video_id=%s bytes=%d", video_id, size)
         multipart_mb = int(os.environ.get("S3_MULTIPART_MB", "16"))
         config = TransferConfig(
             multipart_threshold=multipart_mb * 1024 * 1024,
@@ -85,7 +85,7 @@ def upload_video(file_bytes: bytes, filename: str) -> dict:
             max_concurrency=int(os.environ.get("S3_MAX_CONCURRENCY", "10")),
             use_threads=True,
         )
-        cb = _ProgressLogger(label=key, total_bytes=size, interval_sec=float(os.environ.get("S3_PROGRESS_SEC", "5")))
+        cb = _ProgressLogger(label=video_id, total_bytes=size, interval_sec=float(os.environ.get("S3_PROGRESS_SEC", "5")))
         _s3().upload_fileobj(
             Fileobj=io.BytesIO(file_bytes),
             Bucket=S3_BUCKET,
@@ -94,9 +94,9 @@ def upload_video(file_bytes: bytes, filename: str) -> dict:
             Config=config,
             Callback=cb,
         )
-        log.info("Uploaded video to S3 OK: s3://%s/%s", S3_BUCKET, key)
+        log.info("Uploaded video to S3 OK: video_id=%s", video_id)
     except Exception as e:
-        log.error("S3 upload FAILED: bucket=%s key=%s err=%s", S3_BUCKET, key, e, exc_info=True)
+        log.error("S3 upload failed for video_id=%s (%s)", video_id, type(e).__name__)
         raise
     s3_uri = f"s3://{S3_BUCKET}/{key}"
     return {

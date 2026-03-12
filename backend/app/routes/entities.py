@@ -66,14 +66,14 @@ def api_entities_from_image():
         log.warning("[ENTITIES] Missing 'name' in request")
         return jsonify({"error": "Missing 'name'"}), 400
     image_bytes = file.read()
-    log.info("[ENTITIES] Creating entity: name=%r image_size=%d bytes", name.strip(), len(image_bytes))
+    log.info("[ENTITIES] Creating entity from uploaded image (%d bytes)", len(image_bytes))
     faces = detect_and_crop_faces(image_bytes, min_confidence=ENTITY_FACE_MIN_CONFIDENCE)
     log.info("[ENTITIES] ResNet10 SSD detected %d faces (min_conf=%.2f)", len(faces), ENTITY_FACE_MIN_CONFIDENCE)
     if not faces:
-        log.warning("[ENTITIES] No face detected for entity %r", name.strip())
+        log.warning("[ENTITIES] No face detected in uploaded entity image")
         return jsonify({"error": "No face detected in image. Use a clear, front-facing photo with good lighting."}), 404
     best = faces[0]
-    log.info("[ENTITIES] Best face: confidence=%.4f bbox=%s", best["confidence"], best["bbox"])
+    log.info("[ENTITIES] Selected best face (confidence=%.4f)", best["confidence"])
     face_b64 = best["image_base64"]
     embed_b64 = best.get("embedding_crop_base64") or face_b64
     import base64
@@ -83,11 +83,11 @@ def api_entities_from_image():
         embedding = embed_image(media)
         log.info("[ENTITIES] Embedding generated: dim=%d", len(embedding))
     except Exception as e:
-        log.error("[ENTITIES] Embedding FAILED for %r: %s", name.strip(), e, exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        log.error("[ENTITIES] Embedding failed (%s)", type(e).__name__)
+        return jsonify({"error": "Internal server error"}), 500
     entity_id = name.strip().lower().replace(" ", "-")
     rec = index_add(id=entity_id, embedding=embedding, metadata={"name": name.strip(), "face_snap_base64": face_b64}, type="entity")
-    log.info("[ENTITIES] Entity created: id=%s name=%s", rec["id"], name.strip())
+    log.info("[ENTITIES] Entity created: id=%s", rec["id"])
     return jsonify({
         "indexId": FIXED_INDEX_ID,
         "entity": {"id": rec["id"], "name": name.strip()},
