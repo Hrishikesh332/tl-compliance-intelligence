@@ -1,0 +1,54 @@
+services:
+  - type: web
+    name: video-compliance-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --timeout 800 --bind 0.0.0.0:$PORT
+    healthCheckPath: /health
+    envVars:
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_SESSION_TOKEN
+        sync: false
+      - key: AWS_REGION
+        value: us-east-1
+      - key: S3_BUCKET
+        sync: false
+      - key: MARENGO_INDEX_ID
+        sync: false
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: FLASK_DEBUG
+        value: "false"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: WARMUP_ON_STARTUP
+        value: "true"
+      - key: APP_URL
+        sync: false
+      - key: SELF_PING_ENABLED
+        value: "false"
+      - key: ALLOW_RENDER_SELF_PING
+        value: "false"
+      - key: SELF_PING_INTERVAL_MINUTES
+        value: "9"
+      - key: SELF_PING_TIMEOUT_SECONDS
+        value: "10"
+      - key: SELF_PING_START_DELAY_SECONDS
+        value: "30"
+
+  - type: cron
+    name: video-compliance-health-ping
+    runtime: python
+    schedule: "*/9 * * * *"
+    buildCommand: "true"
+    startCommand: bash -lc 'curl -fsS "$APP_URL/health"'
+    envVars:
+      - key: APP_URL
+        fromService:
+          type: web
+          name: video-compliance-backend
+          envVarKey: APP_URL

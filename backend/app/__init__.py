@@ -102,12 +102,22 @@ def _get_self_ping_base_url() -> str:
     return ""
 
 
+def _is_render_runtime() -> bool:
+    return any(
+        (os.getenv(env_var) or "").strip()
+        for env_var in ("RENDER", "RENDER_SERVICE_ID", "RENDER_INSTANCE_ID")
+    )
+
+
 def _should_enable_self_ping() -> bool:
-    if not _is_truthy(os.getenv("SELF_PING_ENABLED"), default=True):
+    if not _is_truthy(os.getenv("SELF_PING_ENABLED"), default=not _is_render_runtime()):
         return False
 
     app_url = _get_self_ping_base_url().lower()
     if not app_url:
+        return False
+
+    if _is_render_runtime() and not _is_truthy(os.getenv("ALLOW_RENDER_SELF_PING"), default=False):
         return False
 
     return all(local_host not in app_url for local_host in ("localhost", "127.0.0.1"))
@@ -137,7 +147,12 @@ def _configure_self_ping_scheduler(app: Flask) -> None:
     global _self_ping_scheduler
 
     if not _should_enable_self_ping():
-        app.logger.info("Self-ping scheduler disabled (no public app URL or explicitly disabled)")
+        if _is_render_runtime():
+            app.logger.info(
+                "Self-ping scheduler disabled on Render by default; use an external uptime monitor or set ALLOW_RENDER_SELF_PING=true to override"
+            )
+        else:
+            app.logger.info("Self-ping scheduler disabled (no public app URL or explicitly disabled)")
         return
 
     with _self_ping_lock:
