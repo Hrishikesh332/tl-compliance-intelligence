@@ -81,6 +81,8 @@ Typical upload response:
 | Method | Path                                      | Purpose                                                                           |
 | ------ | ----------------------------------------- | --------------------------------------------------------------------------------- |
 | `POST` | `/api/documents/upload`                   | Upload a document, store it, chunk it, and ingest it into the document retriever. |
+| `GET`  | `/api/documents`                          | List ingested documents with chunk counts.                                       |
+| `GET`  | `/api/documents/chunks`                   | List all document chunks (live from S3 or local index; no embeddings). Optional query `?text=false` to omit chunk text. |
 | `GET`  | `/api/documents/file/{doc_id}/{filename}` | Serve the stored source file back to the browser.                                 |
 
 

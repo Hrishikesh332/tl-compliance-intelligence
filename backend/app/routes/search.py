@@ -211,7 +211,7 @@ def api_search_hybrid():
         if file.filename:
             image_bytes = file.read()
     text_query = (data.get("query") or data.get("text") or request_query or "").strip()
-    doc_top_k = max(1, min(10, int(data.get("doc_top_k", 5))))
+    doc_top_k = max(1, min(6, int(data.get("doc_top_k", 5))))
 
     video_results: list[dict] = []
     display_query = text_query

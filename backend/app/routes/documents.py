@@ -12,6 +12,7 @@ from app.services.nemo_retriever import (
     S3_DOC_PREFIX,
     embed_query,
     ingest_document,
+    list_chunks,
     list_docs,
     search_docs,
     upload_document,
@@ -78,6 +79,23 @@ def api_list_documents():
     except Exception as exc:
         log.error("Failed to list documents (%s)", type(exc).__name__)
         return jsonify({"error": "Internal server error"}), 500
+
+
+# List all document chunks (live from S3 or local index), without embeddings
+@documents_bp.route("/chunks", methods=["GET"])
+def api_list_document_chunks():
+    try:
+        include_text = request.args.get("text", "true").strip().lower() in ("1", "true", "yes")
+        chunks = list_chunks(include_text=include_text)
+        return jsonify({
+            "count": len(chunks),
+            "chunks": chunks,
+            "source": "s3" if S3_BUCKET else "local",
+        })
+    except Exception as exc:
+        log.error("Failed to list document chunks (%s)", type(exc).__name__)
+        return jsonify({"error": "Internal server error"}), 500
+
 
 # Semantic search over ingested documents
 @documents_bp.route("/search", methods=["POST"])

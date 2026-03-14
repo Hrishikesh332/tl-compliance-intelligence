@@ -15,13 +15,16 @@ S3_BUCKET = os.environ.get("S3_BUCKET", "")
 S3_DOC_PREFIX = "documents"
 S3_DOC_INDEX_KEY = "document-index/nemo-docs.json"
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "")
-EMBED_MODEL = "nvidia/nv-embedqa-e5-v5"
-EMBED_DIM = 1024
+EMBED_MODEL = "nvidia/llama-nemotron-embed-vl-1b-v2"
+EMBED_DIM = 2048
 
 ALLOWED_EXTENSIONS = {
     ".pdf", ".docx", ".pptx", ".html", ".txt", ".md",
     ".png", ".jpg", ".jpeg", ".bmp", ".tiff",
 }
+
+# Document-only extensions for folder re-ingest (no images)
+DOC_EXTENSIONS = {".pdf", ".docx", ".pptx", ".html", ".txt", ".md"}
 
 MAX_DOC_SIZE = 50 * 1024 * 1024  # 50 MB
 
@@ -550,8 +553,6 @@ def _embed_via_requests(texts: list[str], input_type: str) -> list[list[float]]:
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    """Embed a batch of passage texts using NVIDIA nv-embedqa-e5-v5.
-    Truncates to EMBED_MAX_CHARS to stay within the model's 512-token limit."""
     if not NVIDIA_API_KEY:
         raise RuntimeError("NVIDIA_API_KEY is not set — cannot embed documents")
     truncated = [t[:EMBED_MAX_CHARS] for t in texts]
@@ -587,6 +588,8 @@ def add_chunks(
             "chunk_index": i,
             "text": text[:5000],
             "embedding": emb,
+            "embedding_model": EMBED_MODEL,
+            "embedding_dim": len(emb) if emb else 0,
         }
         if sections and i < len(sections):
             rec["section"] = sections[i]
@@ -608,13 +611,28 @@ def search_docs(query_embedding: list[float], top_k: int = 10) -> list[dict]:
         return []
 
     qv = np.array(query_embedding, dtype=np.float64)
+    qdim = len(query_embedding)
+    if qdim == 0:
+        return []
     qn = np.linalg.norm(qv)
     if qn > 0:
         qv = qv / qn
 
     scored: list[dict] = []
+    skipped_mismatch = 0
+    skipped_invalid = 0
     for rec in _doc_index:
-        dv = np.array(rec["embedding"], dtype=np.float64)
+        emb = rec.get("embedding")
+        if not isinstance(emb, list) or not emb:
+            skipped_invalid += 1
+            continue
+
+        rec_dim = int(rec.get("embedding_dim") or len(emb))
+        if rec_dim != qdim:
+            skipped_mismatch += 1
+            continue
+
+        dv = np.array(emb, dtype=np.float64)
         dn = np.linalg.norm(dv)
         if dn > 0:
             dv = dv / dn
@@ -622,6 +640,16 @@ def search_docs(query_embedding: list[float], top_k: int = 10) -> list[dict]:
         result = {k: v for k, v in rec.items() if k != "embedding"}
         result["score"] = round(score, 6)
         scored.append(result)
+
+    if skipped_mismatch:
+        log.warning(
+            "Skipped %d document chunk(s) with embedding dim mismatch (query_dim=%d model=%s). Re-ingest documents to refresh old embeddings.",
+            skipped_mismatch,
+            qdim,
+            EMBED_MODEL,
+        )
+    if skipped_invalid:
+        log.warning("Skipped %d document chunk(s) with missing/invalid embeddings", skipped_invalid)
 
     scored.sort(key=lambda x: -x["score"])
     return scored[:top_k]
@@ -638,6 +666,22 @@ def list_docs() -> list[dict]:
             seen[did] = {"doc_id": did, "filename": rec["filename"], "chunks": 0}
         seen[did]["chunks"] += 1
     return list(seen.values())
+
+
+def list_chunks(include_text: bool = True) -> list[dict]:
+
+    _load_doc_index()
+
+    out: list[dict] = []
+    for rec in _doc_index:
+        chunk = {k: v for k, v in rec.items() if k != "embedding"}
+        if not include_text:
+            chunk.pop("text", None)
+        else:
+            # Keep text as-is; caller can truncate for display if needed
+            pass
+        out.append(chunk)
+    return out
 
 
 
@@ -695,3 +739,54 @@ def ingest_document(file_path: str, doc_id: str, filename: str) -> dict:
     )
 
     return {"doc_id": doc_id, "chunks": len(chunks), "status": "ready"}
+
+
+def reingest_documents(
+    documents_dir: str | Path | None = None,
+) -> dict:
+
+    default_dir = _BACKEND_DIR.parent / "documents"
+    dir_path = Path(documents_dir).resolve() if documents_dir else default_dir
+    if not dir_path.is_dir():
+        dir_path.mkdir(parents=True, exist_ok=True)
+
+    files = sorted(
+        p for p in dir_path.iterdir()
+        if p.is_file() and p.suffix.lower() in DOC_EXTENSIONS
+    )
+
+    cleared = clear_doc_index()
+    results: list[dict] = []
+    ingested = 0
+    failed = 0
+
+    for path in files:
+        doc_id = str(uuid.uuid4())
+        filename = path.name
+        try:
+            result = ingest_document(str(path), doc_id, filename)
+            chunks = result.get("chunks", 0)
+            status = result.get("status", "?")
+            results.append({
+                "doc_id": doc_id,
+                "filename": filename,
+                "chunks": chunks,
+                "status": status,
+            })
+            ingested += 1
+        except Exception as e:
+            results.append({
+                "doc_id": doc_id,
+                "filename": filename,
+                "error": str(e),
+            })
+            failed += 1
+            log.warning("Reingest failed for %s: %s", filename, e)
+
+    return {
+        "cleared": cleared,
+        "ingested": ingested,
+        "failed": failed,
+        "results": results,
+        "documents_dir": str(dir_path),
+    }
