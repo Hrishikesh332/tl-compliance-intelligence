@@ -2,17 +2,17 @@ import base64
 import logging
 import random
 import subprocess
-import time as _time
 import math
+import time
+import threading
 
 from flask import Blueprint, Response, jsonify, request
 
 from app.services.bedrock_marengo import get_async_invocation, load_video_embeddings_from_s3
-from concurrent.futures import ThreadPoolExecutor
 from app.services.s3_store import upload_video, upload_thumbnail, get_presigned_url, S3_EMBEDDINGS_OUTPUT
-from app.services.vector_store import FIXED_INDEX_ID, add as index_add, get_entry as index_get_entry, _save as vs_save, _index as vs_index
+from app.services.vector_store import FIXED_INDEX_ID, add as index_add, get_entry as index_get_entry, save_index_store as vs_save, get_index_records as vs_index
 
-from app.utils.faces import detect_and_crop_faces, deduplicate_faces, embed_face_crop, _cosine as face_cosine_sim
+from app.utils.faces import detect_and_crop_faces, deduplicate_faces, embed_face_crop, cosine_similarity as face_cosine_sim
 from app.utils.video_helpers import (
     get_tasks,
     invalidate_video_cache,
@@ -33,7 +33,7 @@ from app.utils.video_helpers import (
     TRANSCRIPT_PROMPT,
     TRANSCRIPT_SCHEMA,
     parse_transcript_response,
-    _timestamp_seconds_for_sort,
+    timestamp_seconds_for_sort,
     DETECT_PROMPT,
     parse_detect_response,
     save_face_to_disk,
@@ -41,37 +41,37 @@ from app.utils.video_helpers import (
     save_object_frame_to_disk,
     load_object_frame_from_disk,
     clips_above_threshold,
-    compute_duration_seconds_from_embeddings,
 )
 from app.services.bedrock_pegasus import analyze_video as pegasus_analyze_video
 
 log = logging.getLogger("app.routes.videos")
 
-_THROTTLE_KEYWORDS = ("Throttling", "Too many requests", "ThrottlingException", "Rate exceeded")
-_MAX_RETRIES = 7
-_BASE_DELAY_SEC = 2.0
-_MAX_DELAY_SEC = 90.0
+THROTTLE_KEYWORDS = ("Throttling", "Too many requests", "ThrottlingException", "Rate exceeded")
+MAX_RETRIES = 7
+BASE_DELAY_SECONDS = 2.0
+MAX_DELAY_SECONDS = 90.0
 
 
-def _retry_bedrock_call(fn, *, label: str = "bedrock_call"):
+def retry_bedrock_call(fn, *, label: str = "bedrock_call"):
     """Call *fn* with exponential backoff on Bedrock throttling errors."""
-    for attempt in range(1, _MAX_RETRIES + 1):
+    for attempt in range(1, MAX_RETRIES + 1):
         try:
             return fn()
         except Exception as exc:
             msg = str(exc)
-            if not any(kw in msg for kw in _THROTTLE_KEYWORDS) or attempt >= _MAX_RETRIES:
+            if not any(kw in msg for kw in THROTTLE_KEYWORDS) or attempt >= MAX_RETRIES:
                 raise
-            delay = min(_MAX_DELAY_SEC, _BASE_DELAY_SEC * (2 ** (attempt - 1))) + random.uniform(0.0, 1.5)
+            delay = min(MAX_DELAY_SECONDS, BASE_DELAY_SECONDS * (2 ** (attempt - 1))) + random.uniform(0.0, 1.5)
             log.warning(
                 "%s throttled (attempt %d/%d). Retrying in %.1fs ...",
-                label, attempt, _MAX_RETRIES, delay,
+                label, attempt, MAX_RETRIES, delay,
             )
-            _time.sleep(delay)
-    raise RuntimeError(f"{label}: exhausted {_MAX_RETRIES} retries")
+            time.sleep(delay)
+    raise RuntimeError(f"{label}: exhausted {MAX_RETRIES} retries")
 
 
 videos_bp = Blueprint("videos", __name__)
+video_list_build_lock = threading.Lock()
 
 
 @videos_bp.route("/upload", methods=["POST"])
@@ -256,118 +256,42 @@ def api_get_task(task_id: str):
 def api_list_videos():
     from app.services.vector_store import list_entries as index_list
     cache, cache_ts, ttl = get_video_list_cache()
-    now = _time.monotonic()
+    now = time.monotonic()
     if cache and (now - cache_ts) < ttl:
-        # Cache can be primed at startup; opportunistically fix obviously-wrong durations
-        # even when serving from cache (best-effort, only for suspiciously small values).
-        fixed_any = False
-        for entry in cache.get("videos", []) if isinstance(cache, dict) else []:
-            if not isinstance(entry, dict):
-                continue
-            meta = entry.get("metadata") or {}
-            if meta.get("status") != "ready":
-                continue
-            existing = entry.get("duration_seconds", meta.get("duration_seconds"))
-            try:
-                existing_f = float(existing) if existing is not None else None
-            except (TypeError, ValueError):
-                existing_f = None
-            if existing_f is not None and math.isfinite(existing_f) and existing_f >= 60:
-                continue
-            output_uri = meta.get("output_s3_uri") or f"{S3_EMBEDDINGS_OUTPUT}/{entry.get('id')}"
-            emb_dur = compute_duration_seconds_from_embeddings(output_uri)
-            if emb_dur is None:
-                continue
-            should_update = (
-                existing_f is None
-                or (not math.isfinite(existing_f))
-                or emb_dur > (existing_f + 5.0)
-            )
-            if not should_update:
-                continue
-            meta["duration_seconds"] = emb_dur
-            entry["duration_seconds"] = emb_dur
-            for rec in vs_index():
-                if rec.get("id") == entry.get("id"):
-                    rec.setdefault("metadata", {})["duration_seconds"] = emb_dur
-                    break
-            fixed_any = True
-        if fixed_any:
-            vs_save()
-            set_video_list_cache(cache)
         return jsonify(cache)
 
-    t0 = _time.perf_counter()
-    entries = index_list(type_filter="video")
+    with video_list_build_lock:
+        cache, cache_ts, ttl = get_video_list_cache()
+        now = time.monotonic()
+        if cache and (now - cache_ts) < ttl:
+            return jsonify(cache)
 
-    def _resolve_urls(entry: dict) -> None:
-        meta = entry.get("metadata") or {}
-        s3_key = meta.get("s3_key")
-        if s3_key:
-            try:
-                entry["stream_url"] = get_presigned_url(s3_key)
-            except Exception:
-                entry["stream_url"] = None
-        thumb_key = meta.get("thumbnail_s3_key")
-        if thumb_key:
-            try:
-                entry["thumbnail_url"] = get_presigned_url(thumb_key)
-            except Exception:
-                entry["thumbnail_url"] = None
-        entry["duration_seconds"] = meta.get("duration_seconds")
-        tb64 = meta.get("thumbnail_base64")
-        if tb64:
-            entry["thumbnail_data_url"] = f"data:image/jpeg;base64,{tb64}"
+        t0 = time.perf_counter()
+        entries = index_list(type_filter="video")
 
-    with ThreadPoolExecutor(max_workers=min(len(entries) or 1, 20)) as pool:
-        list(pool.map(_resolve_urls, entries))
+        for entry in entries:
+            meta = entry.get("metadata") or {}
+            s3_key = meta.get("s3_key")
+            if s3_key:
+                try:
+                    entry["stream_url"] = get_presigned_url(s3_key)
+                except Exception:
+                    entry["stream_url"] = None
+            thumb_key = meta.get("thumbnail_s3_key")
+            if thumb_key:
+                try:
+                    entry["thumbnail_url"] = get_presigned_url(thumb_key)
+                except Exception:
+                    entry["thumbnail_url"] = None
+            entry["duration_seconds"] = meta.get("duration_seconds")
+            tb64 = meta.get("thumbnail_base64")
+            if tb64:
+                entry["thumbnail_data_url"] = f"data:image/jpeg;base64,{tb64}"
 
-    # Best-effort duration correction (some uploads have incorrect ffprobe duration).
-    # Only runs for "ready" videos and only if embeddings suggest a different duration.
-    fixed_any = False
-    for entry in entries:
-        meta = entry.get("metadata") or {}
-        if meta.get("status") != "ready":
-            continue
-        existing = meta.get("duration_seconds")
-        try:
-            existing_f = float(existing) if existing is not None else None
-        except (TypeError, ValueError):
-            existing_f = None
-
-        # Only attempt correction when duration is missing or suspiciously small.
-        if existing_f is not None and math.isfinite(existing_f) and existing_f >= 60:
-            continue
-
-        output_uri = meta.get("output_s3_uri") or f"{S3_EMBEDDINGS_OUTPUT}/{entry.get('id')}"
-        emb_dur = compute_duration_seconds_from_embeddings(output_uri)
-        if emb_dur is None:
-            continue
-
-        should_update = (
-            existing_f is None
-            or (not math.isfinite(existing_f))
-            or emb_dur > (existing_f + 5.0)
-        )
-        if not should_update:
-            continue
-
-        meta["duration_seconds"] = emb_dur
-        entry["duration_seconds"] = emb_dur
-        # Persist into vector store so the dashboard stays correct.
-        for rec in vs_index():
-            if rec.get("id") == entry.get("id"):
-                rec.setdefault("metadata", {})["duration_seconds"] = emb_dur
-                break
-        fixed_any = True
-
-    if fixed_any:
-        vs_save()
-
-    result = {"indexId": FIXED_INDEX_ID, "count": len(entries), "videos": entries}
-    set_video_list_cache(result)
-    log.info("Video list built in %.0fms (%d videos)", (_time.perf_counter() - t0) * 1000, len(entries))
-    return jsonify(result)
+        result = {"indexId": FIXED_INDEX_ID, "count": len(entries), "videos": entries}
+        set_video_list_cache(result)
+        log.info("Video list built in %.0fms (%d videos)", (time.perf_counter() - t0) * 1000, len(entries))
+        return jsonify(result)
 
 
 @videos_bp.route("/<video_id>/analysis", methods=["POST", "DELETE"])
@@ -408,13 +332,13 @@ def api_generate_video_analysis(video_id: str):
         }), 400
     try:
         log.info("[ANALYSIS] Calling Pegasus for video_id=%s", video_id)
-        t0 = _time.perf_counter()
+        t0 = time.perf_counter()
         raw_text = pegasus_analyze_video(
             s3_uri,
             VIDEO_ANALYSIS_PROMPT,
             temperature=0,
         )
-        log.info("[ANALYSIS] Pegasus response received in %.1fs (len=%d)", _time.perf_counter() - t0, len(raw_text or ""))
+        log.info("[ANALYSIS] Pegasus response received in %.1fs (len=%d)", time.perf_counter() - t0, len(raw_text or ""))
         analysis_dict = parse_video_analysis_response(raw_text)
         if not analysis_dict:
             log.error("[ANALYSIS] Failed to parse Pegasus response as JSON for video_id=%s", video_id)
@@ -494,14 +418,14 @@ def api_video_transcript(video_id: str):
         " (append from %.0fs)" % append_from_seconds if append_from_seconds is not None else "",
     )
     try:
-        t0 = _time.perf_counter()
+        t0 = time.perf_counter()
         raw = pegasus_analyze_video(
             s3_uri,
             TRANSCRIPT_PROMPT,
             temperature=0,
             response_schema=TRANSCRIPT_SCHEMA,
         )
-        log.info("[TRANSCRIPT] Pegasus response received in %.1fs (%d chars)", _time.perf_counter() - t0, len(raw or ""))
+        log.info("[TRANSCRIPT] Pegasus response received in %.1fs (%d chars)", time.perf_counter() - t0, len(raw or ""))
         new_segments = parse_transcript_response(raw)
         if not new_segments:
             log.warning("[TRANSCRIPT] No segments parsed from response")
@@ -512,10 +436,10 @@ def api_video_transcript(video_id: str):
         log.info("[TRANSCRIPT] Parsed %d segments", len(new_segments))
         # If appending: keep existing segments before append_from_seconds, add new segments from that time onward
         if append_from_seconds is not None:
-            kept = [s for s in existing_transcript if _timestamp_seconds_for_sort(s.get("time") or "0:00") < append_from_seconds]
-            appended = [s for s in new_segments if _timestamp_seconds_for_sort(s.get("time") or "0:00") >= append_from_seconds]
+            kept = [s for s in existing_transcript if timestamp_seconds_for_sort(s.get("time") or "0:00") < append_from_seconds]
+            appended = [s for s in new_segments if timestamp_seconds_for_sort(s.get("time") or "0:00") >= append_from_seconds]
             transcript = kept + appended
-            transcript.sort(key=lambda s: _timestamp_seconds_for_sort(s.get("time") or "0:00"))
+            transcript.sort(key=lambda s: timestamp_seconds_for_sort(s.get("time") or "0:00"))
             log.info("[TRANSCRIPT] Merged: %d kept + %d appended = %d total", len(kept), len(appended), len(transcript))
         else:
             transcript = new_segments
@@ -774,15 +698,15 @@ def api_video_insights(video_id: str):
         log.warning("[INSIGHTS] Video not ready: video_id=%s status=%s", video_id, meta.get("status"))
         return jsonify({"error": "Video is not ready (indexing not complete). Wait for status 'ready'.", "video_id": video_id}), 400
 
-    t_total_start = _time.perf_counter()
+    t_total_start = time.perf_counter()
     try:
         # ────────────────────────────────────────────────────
         # STEP 1 — Single Pegasus call: objects + face keyframes
         # ────────────────────────────────────────────────────
         log.info("[INSIGHTS] Calling Pegasus DETECT_PROMPT for video_id=%s", video_id)
-        t0 = _time.perf_counter()
+        t0 = time.perf_counter()
         raw_response = pegasus_analyze_video(s3_uri, DETECT_PROMPT)
-        log.info("[INSIGHTS] Pegasus response received in %.1fs (%d chars)", _time.perf_counter() - t0, len(raw_response or ""))
+        log.info("[INSIGHTS] Pegasus response received in %.1fs (%d chars)", time.perf_counter() - t0, len(raw_response or ""))
 
         detect_data = parse_detect_response(raw_response)
         objects_raw = detect_data["objects"]
@@ -862,7 +786,7 @@ def api_video_insights(video_id: str):
         # Slightly lower confidence (0.50) to catch more faces (e.g. partial profile)
         face_min_conf = 0.50
 
-        def _detect_faces_at_times(timestamps: list[tuple[float, str]]):
+        def detect_faces_at_times(timestamps: list[tuple[float, str]]):
             for t, desc in timestamps:
                 log.info("[FACES] Extracting frame at t=%.1fs (%s)", t, desc)
                 frame_bytes = get_frame_bytes(video_id, t)
@@ -920,7 +844,7 @@ def api_video_insights(video_id: str):
         if len(face_sample_timestamps) > 10:
             log.info("  ... and %d more", len(face_sample_timestamps) - 10)
 
-        _detect_faces_at_times(face_sample_timestamps)
+        detect_faces_at_times(face_sample_timestamps)
 
         # Phase 2 fallback: only if Pegasus keyframes did not yield any faces.
         if not all_face_detections:
@@ -941,7 +865,7 @@ def api_video_insights(video_id: str):
             if len(fallback_samples) > 10:
                 log.info("  ... and %d more", len(fallback_samples) - 10)
 
-            _detect_faces_at_times(fallback_samples)
+            detect_faces_at_times(fallback_samples)
             face_sample_timestamps.extend(fallback_samples)
 
         log.info("[FACES] Total raw face detections across %d frames: %d", len(face_sample_timestamps), len(all_face_detections))
@@ -996,7 +920,7 @@ def api_video_insights(video_id: str):
         vs_save()
         invalidate_video_cache()
 
-        total_elapsed = _time.perf_counter() - t_total_start
+        total_elapsed = time.perf_counter() - t_total_start
         log.info(
             "[INSIGHTS] COMPLETE video_id=%s: objects=%d faces=%d keyframes=%d time=%.1fs",
             video_id, len(out_objects), len(detected_faces), len(keyframes_info), total_elapsed,

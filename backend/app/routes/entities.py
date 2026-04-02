@@ -6,9 +6,8 @@ from app.services.bedrock_marengo import embed_image, media_source_base64
 from app.services.vector_store import (
     FIXED_INDEX_ID,
     add as index_add,
-    list_entries as index_list,
-    get_entry as index_get_entry,
     delete as index_delete,
+    get_index_records,
 )
 
 from app.utils.faces import detect_and_crop_faces, ENTITY_FACE_MIN_CONFIDENCE
@@ -20,19 +19,18 @@ entities_bp = Blueprint("entities", __name__)
 
 @entities_bp.route("/entities", methods=["GET"])
 def api_list_entities():
-    raw = index_list(type_filter="entity")
+    raw = get_index_records()
     entities = []
     for rec in raw:
-        eid = rec.get("id")
-        if not eid:
+        if rec.get("type") != "entity":
             continue
-        full = index_get_entry(eid)
-        if not full or not full.get("embedding"):
+        entity_id = rec.get("id")
+        if not entity_id or not rec.get("embedding"):
             continue
-        meta = full.get("metadata") or {}
+        meta = rec.get("metadata") or {}
         entities.append({
-            "id": full["id"],
-            "type": full.get("type", "entity"),
+            "id": entity_id,
+            "type": rec.get("type", "entity"),
             "metadata": meta,
         })
     log.info("[ENTITIES] Listed %d entities (from %d raw records)", len(entities), len(raw))

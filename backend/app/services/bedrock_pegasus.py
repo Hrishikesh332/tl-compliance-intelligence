@@ -16,42 +16,42 @@ log = logging.getLogger(__name__)
 PEGASUS_MODEL_ID = "twelvelabs.pegasus-1-2-v1:0"
 REGION_PREFIX = {"us-east-1": "us"}
 
-_BEDROCK_RETRY_CONFIG = Config(
+BEDROCK_RETRY_CONFIG = Config(
     retries={"max_attempts": 10, "mode": "adaptive"},
     read_timeout=300,
     connect_timeout=10,
 )
 
 # Singleton client — keeps adaptive retry's token bucket alive across calls
-_client_lock = threading.Lock()
-_client_instance = None
+client_lock = threading.Lock()
+client_instance = None
 
 # Serialize all Bedrock invocations so concurrent requests never compete
-_invoke_lock = threading.Lock()
+invoke_lock = threading.Lock()
 
 
-def _bedrock_client():
-    global _client_instance
-    if _client_instance is None:
-        with _client_lock:
-            if _client_instance is None:
+def get_bedrock_client():
+    global client_instance
+    if client_instance is None:
+        with client_lock:
+            if client_instance is None:
                 region = os.environ.get("AWS_REGION", "us-east-1")
-                _client_instance = boto3.client(
+                client_instance = boto3.client(
                     "bedrock-runtime",
                     region_name=region,
-                    config=_BEDROCK_RETRY_CONFIG,
+                    config=BEDROCK_RETRY_CONFIG,
                 )
                 log.info("[Pegasus] Created singleton Bedrock client (region=%s, adaptive retries)", region)
-    return _client_instance
+    return client_instance
 
 
-def _inference_profile_id():
+def get_inference_profile_id():
     region = os.environ.get("AWS_REGION", "us-east-1")
     prefix = REGION_PREFIX.get(region, "us")
     return f"{prefix}.{PEGASUS_MODEL_ID}"
 
 
-def _get_account_id() -> str:
+def get_account_id() -> str:
     acct = os.environ.get("AWS_ACCOUNT_ID", "")
     if acct:
         return acct
@@ -67,8 +67,8 @@ def analyze_video(
     temperature: float | None = None,
     response_schema: dict | None = None,
 ) -> str:
-    client = _bedrock_client()
-    owner = bucket_owner or _get_account_id()
+    client = get_bedrock_client()
+    owner = bucket_owner or get_account_id()
     body: dict = {
         "inputPrompt": prompt[:4000],
         "mediaSource": {
@@ -83,9 +83,9 @@ def analyze_video(
     if response_schema is not None:
         body["responseFormat"] = {"jsonSchema": response_schema}
     payload = json.dumps(body)
-    model_id = _inference_profile_id()
+    model_id = get_inference_profile_id()
 
-    with _invoke_lock:
+    with invoke_lock:
         t0 = time.perf_counter()
         log.info("[Pegasus] Acquired invoke lock, calling Bedrock …")
         try:

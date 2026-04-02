@@ -12,18 +12,18 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 
-_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-_self_ping_lock = threading.Lock()
-_self_ping_scheduler: BackgroundScheduler | None = None
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+self_ping_lock = threading.Lock()
+self_ping_scheduler: BackgroundScheduler | None = None
 
 load_dotenv()
 
 
-def _setup_logging(app: Flask) -> None:
+def setup_logging(app: Flask) -> None:
     level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
 
-    logging.basicConfig(format=_LOG_FORMAT, level=level, force=True)
+    logging.basicConfig(format=LOG_FORMAT, level=level, force=True)
 
     for name in ("app", "app.routes", "app.utils", "app.services"):
         logging.getLogger(name).setLevel(level)
@@ -36,7 +36,7 @@ def create_app(*, enable_startup_tasks: bool = True):
     app = Flask(__name__)
     app.config["MODEL_DIR"] = Path(__file__).resolve().parent.parent / "models"
 
-    _setup_logging(app)
+    setup_logging(app)
 
     CORS(app, allow_headers=["Content-Type"])
 
@@ -53,11 +53,11 @@ def create_app(*, enable_startup_tasks: bool = True):
 
     @app.before_request
     def log_request_start():
-        g._req_start = time.perf_counter()
+        g.request_start_time = time.perf_counter()
 
     @app.after_request
     def log_request_end(response):
-        elapsed = (time.perf_counter() - getattr(g, "_req_start", time.perf_counter())) * 1000
+        elapsed = (time.perf_counter() - getattr(g, "request_start_time", time.perf_counter())) * 1000
         app.logger.info(
             "%s %s -> %s (%.1fms)",
             request.method,
@@ -79,22 +79,22 @@ def create_app(*, enable_startup_tasks: bool = True):
     app.register_blueprint(documents_bp, url_prefix="/api/documents")
 
     if enable_startup_tasks:
-        _configure_self_ping_scheduler(app)
+        configure_self_ping_scheduler(app)
 
     warmup_enabled = os.environ.get("WARMUP_ON_STARTUP", "true").strip().lower() in ("1", "true", "yes", "on")
     if enable_startup_tasks and warmup_enabled:
-        threading.Thread(target=_warmup_video_list, args=(app,), daemon=True).start()
+        threading.Thread(target=warmup_video_list, args=(app,), daemon=True).start()
 
     return app
 
 
-def _is_truthy(value: str | None, *, default: bool = False) -> bool:
+def is_truthy(value: str | None, *, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
-def _get_self_ping_base_url() -> str:
+def get_self_ping_base_url() -> str:
     for env_var in ("SELF_PING_URL", "APP_URL", "RENDER_EXTERNAL_URL"):
         value = (os.getenv(env_var) or "").strip()
         if value:
@@ -102,29 +102,29 @@ def _get_self_ping_base_url() -> str:
     return ""
 
 
-def _is_render_runtime() -> bool:
+def is_render_runtime() -> bool:
     return any(
         (os.getenv(env_var) or "").strip()
         for env_var in ("RENDER", "RENDER_SERVICE_ID", "RENDER_INSTANCE_ID")
     )
 
 
-def _should_enable_self_ping() -> bool:
-    if not _is_truthy(os.getenv("SELF_PING_ENABLED"), default=not _is_render_runtime()):
+def should_enable_self_ping() -> bool:
+    if not is_truthy(os.getenv("SELF_PING_ENABLED"), default=not is_render_runtime()):
         return False
 
-    app_url = _get_self_ping_base_url().lower()
+    app_url = get_self_ping_base_url().lower()
     if not app_url:
         return False
 
-    if _is_render_runtime() and not _is_truthy(os.getenv("ALLOW_RENDER_SELF_PING"), default=False):
+    if is_render_runtime() and not is_truthy(os.getenv("ALLOW_RENDER_SELF_PING"), default=False):
         return False
 
     return all(local_host not in app_url for local_host in ("localhost", "127.0.0.1"))
 
 
-def _self_ping_health(app: Flask, *, timeout_seconds: float) -> None:
-    base_url = _get_self_ping_base_url()
+def self_ping_health(app: Flask, *, timeout_seconds: float) -> None:
+    base_url = get_self_ping_base_url()
     if not base_url:
         return
 
@@ -143,11 +143,11 @@ def _self_ping_health(app: Flask, *, timeout_seconds: float) -> None:
         app.logger.warning("Self-ping failed (%s)", type(exc).__name__)
 
 
-def _configure_self_ping_scheduler(app: Flask) -> None:
-    global _self_ping_scheduler
+def configure_self_ping_scheduler(app: Flask) -> None:
+    global self_ping_scheduler
 
-    if not _should_enable_self_ping():
-        if _is_render_runtime():
+    if not should_enable_self_ping():
+        if is_render_runtime():
             app.logger.info(
                 "Self-ping scheduler disabled on Render by default; use an external uptime monitor or set ALLOW_RENDER_SELF_PING=true to override"
             )
@@ -155,8 +155,8 @@ def _configure_self_ping_scheduler(app: Flask) -> None:
             app.logger.info("Self-ping scheduler disabled (no public app URL or explicitly disabled)")
         return
 
-    with _self_ping_lock:
-        if _self_ping_scheduler and _self_ping_scheduler.running:
+    with self_ping_lock:
+        if self_ping_scheduler and self_ping_scheduler.running:
             return
 
         interval_minutes = max(float(os.getenv("SELF_PING_INTERVAL_MINUTES", "9")), 1.0)
@@ -164,7 +164,7 @@ def _configure_self_ping_scheduler(app: Flask) -> None:
         start_delay_seconds = max(float(os.getenv("SELF_PING_START_DELAY_SECONDS", "30")), 0.0)
         scheduler = BackgroundScheduler(timezone="UTC")
         scheduler.add_job(
-            _self_ping_health,
+            self_ping_health,
             "interval",
             minutes=interval_minutes,
             id="self_ping_health",
@@ -177,7 +177,7 @@ def _configure_self_ping_scheduler(app: Flask) -> None:
         )
         scheduler.start()
         atexit.register(lambda: scheduler.shutdown(wait=False))
-        _self_ping_scheduler = scheduler
+        self_ping_scheduler = scheduler
 
         app.logger.info("Self-ping scheduler started (every %.1f minutes)", interval_minutes)
         app.logger.info(
@@ -185,7 +185,7 @@ def _configure_self_ping_scheduler(app: Flask) -> None:
         )
 
 
-def _warmup_video_list(app: Flask) -> None:
+def warmup_video_list(app: Flask) -> None:
     """Pre-build the full video list (with inline base64 thumbnails) and set
     it in cache so the first GET /api/videos returns instantly with
     thumbnails embedded in the JSON (no extra image downloads needed)."""
@@ -194,8 +194,8 @@ def _warmup_video_list(app: Flask) -> None:
         try:
             from concurrent.futures import ThreadPoolExecutor
 
-            from app.services.vector_store import FIXED_INDEX_ID, list_entries, _index as vs_index, _save as vs_save
-            from app.services.s3_store import get_presigned_url, S3_BUCKET, _s3 as get_s3, upload_thumbnail
+            from app.services.vector_store import FIXED_INDEX_ID, list_entries, get_index_records as vs_index, save_index_store as vs_save
+            from app.services.s3_store import get_presigned_url, S3_BUCKET, get_s3_client as get_s3, upload_thumbnail
             from app.utils.video_helpers import set_video_list_cache, make_tiny_thumbnail_b64
 
             entries = list_entries(type_filter="video")
@@ -216,7 +216,7 @@ def _warmup_video_list(app: Flask) -> None:
                 s3 = get_s3()
                 idx = vs_index()
 
-                def _backfill(entry: dict) -> None:
+                def backfill_video_metadata(entry: dict) -> None:
                     import tempfile
                     meta = entry.get("metadata") or {}
                     vid_id = entry.get("id")
@@ -229,7 +229,7 @@ def _warmup_video_list(app: Flask) -> None:
                             thumb_bytes = resp["Body"].read()
                             b64 = make_tiny_thumbnail_b64(thumb_bytes)
                             if b64:
-                                _update_index_meta(idx, vid_id, {"thumbnail_base64": b64})
+                                update_index_metadata(idx, vid_id, {"thumbnail_base64": b64})
                                 meta["thumbnail_base64"] = b64
                             return
                         except Exception:
@@ -307,7 +307,7 @@ def _warmup_video_list(app: Flask) -> None:
                                     updates["thumbnail_base64"] = b64
 
                         if updates:
-                            _update_index_meta(idx, vid_id, updates)
+                            update_index_metadata(idx, vid_id, updates)
                             meta.update(updates)
                             app.logger.info("Warmup backfill: %s -> duration=%s thumb=%s",
                                             meta.get("filename", vid_id),
@@ -327,12 +327,12 @@ def _warmup_video_list(app: Flask) -> None:
                                 pass
 
                 with ThreadPoolExecutor(max_workers=min(len(needs_backfill), 4)) as pool:
-                    list(pool.map(_backfill, needs_backfill))
+                    list(pool.map(backfill_video_metadata, needs_backfill))
                 vs_save()
                 entries = list_entries(type_filter="video")
                 app.logger.info("Warmup: backfill complete, saved to index")
 
-            def _resolve(entry: dict) -> None:
+            def resolve_video_entry_urls(entry: dict) -> None:
                 meta = entry.get("metadata") or {}
                 s3_key = meta.get("s3_key")
                 if s3_key:
@@ -352,7 +352,7 @@ def _warmup_video_list(app: Flask) -> None:
                     entry["thumbnail_data_url"] = f"data:image/jpeg;base64,{tb64}"
 
             with ThreadPoolExecutor(max_workers=min(len(entries), 20)) as pool:
-                list(pool.map(_resolve, entries))
+                list(pool.map(resolve_video_entry_urls, entries))
 
             result = {"indexId": FIXED_INDEX_ID, "count": len(entries), "videos": entries}
             set_video_list_cache(result)
@@ -361,7 +361,7 @@ def _warmup_video_list(app: Flask) -> None:
             app.logger.debug("Warmup video list skipped (%s)", type(exc).__name__)
 
 
-def _update_index_meta(idx: list, vid_id: str, updates: dict) -> None:
+def update_index_metadata(idx: list, vid_id: str, updates: dict) -> None:
     for rec in idx:
         if rec.get("id") == vid_id:
             meta = rec.setdefault("metadata", {})

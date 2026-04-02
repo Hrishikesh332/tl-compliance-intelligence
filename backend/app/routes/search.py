@@ -1,6 +1,6 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor
-import time as _time
+import time
 
 from flask import Blueprint, jsonify, request
 
@@ -27,7 +27,7 @@ search_bp = Blueprint("search", __name__)
 # ---------------------------------------------------------------------------
 
 
-def _run_video_search(
+def search_video_index(
     data: dict,
     *,
     request_query: str = "",
@@ -50,7 +50,7 @@ def _run_video_search(
     if err or not query_emb:
         return [], display_query or "", err or "Could not get search embedding"
 
-    default_top_k = 8 if is_entity_search else 16
+    default_top_k = 12 if is_entity_search else 24
     top_k = data.get("top_k") or request_top_k or default_top_k
     top_k = max(1, min(50, top_k))
     clips_per_video = data.get("clips_per_video")
@@ -148,17 +148,17 @@ def _run_video_search(
     return out, display_query, None
 
 
-def _run_document_search(text_query: str, doc_top_k: int) -> list[dict]:
+def search_document_index(text_query: str, doc_top_k: int) -> list[dict]:
     from app.services.nemo_retriever import embed_query, search_docs
 
-    t0 = _time.perf_counter()
+    t0 = time.perf_counter()
     log.info("[DOC_SEARCH] Started doc search top_k=%d", doc_top_k)
     query_emb = embed_query(text_query)
     docs = search_docs(query_emb, top_k=doc_top_k)
     log.info(
         "[DOC_SEARCH] Completed %d doc results in %.1fms",
         len(docs),
-        (_time.perf_counter() - t0) * 1000,
+        (time.perf_counter() - t0) * 1000,
     )
     return docs
 
@@ -174,7 +174,7 @@ def api_search_videos():
         if file.filename:
             image_bytes = file.read()
     try:
-        video_results, display_query, err = _run_video_search(
+        video_results, display_query, err = search_video_index(
             data,
             request_query=request_query,
             request_top_k=request_top_k,
@@ -220,17 +220,17 @@ def api_search_hybrid():
     doc_results: list[dict] = []
     doc_error: str | None = None
 
-    hybrid_t0 = _time.perf_counter()
+    hybrid_t0 = time.perf_counter()
     with ThreadPoolExecutor(max_workers=2) as pool:
         log.info("[HYBRID] Launching video search + doc search in parallel")
         video_future = pool.submit(
-            _run_video_search,
+            search_video_index,
             data,
             request_query=request_query,
             request_top_k=request_top_k,
             image_bytes=image_bytes,
         )
-        doc_future = pool.submit(_run_document_search, text_query, doc_top_k) if text_query else None
+        doc_future = pool.submit(search_document_index, text_query, doc_top_k) if text_query else None
         if doc_future is None:
             log.info("[HYBRID] Skipping doc search (empty text query)")
 
@@ -268,7 +268,7 @@ def api_search_hybrid():
 
     log.info(
         "[HYBRID] Returning %d video(s) + %d doc(s) total=%.1fms",
-        len(video_results), len(doc_results), (_time.perf_counter() - hybrid_t0) * 1000,
+        len(video_results), len(doc_results), (time.perf_counter() - hybrid_t0) * 1000,
     )
     return jsonify(resp)
 

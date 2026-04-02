@@ -5,11 +5,12 @@ import math
 import os
 import re
 import subprocess
-import time as _time
+import time
 from pathlib import Path
 
 import numpy as np
 import cv2
+import queue
 
 from app.services.bedrock_marengo import (
     embed_image,
@@ -27,71 +28,70 @@ from app.services.vector_store import (
     search as index_search,
     list_entries as index_list,
     get_entry as index_get_entry,
-    _save as vs_save,
-    _index as vs_index,
+    save_index_store as vs_save,
+    get_index_records as vs_index,
 )
 
 log = logging.getLogger("app.utils.video_helpers")
 
-_BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
-_INSIGHTS_CACHE_ROOT = _BACKEND_DIR / "data" / "videos"
+BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+INSIGHTS_CACHE_ROOT = BACKEND_DIR / "data" / "videos"
 
-_tasks: dict[str, dict] = {}
-_video_list_cache: dict | None = None
-_video_list_cache_ts: float = 0.0
-_VIDEO_LIST_CACHE_TTL: float = 300.0
+video_tasks: dict[str, dict] = {}
+video_list_cache: dict | None = None
+video_list_cache_timestamp: float = 0.0
+VIDEO_LIST_CACHE_TTL: float = 300.0
 
 # ---------------------------------------------------------------------------
 # Background Bedrock job queue + auto-poller
 # ---------------------------------------------------------------------------
 import threading
-import queue as _queue_mod
 
-_bedrock_queue: _queue_mod.Queue = _queue_mod.Queue()
-_poller_jobs: list[dict] = []
-_poller_lock = threading.Lock()
-_worker_started = False
-_poller_started = False
+bedrock_queue: queue.Queue = queue.Queue()
+bedrock_poller_jobs: list[dict] = []
+bedrock_poller_lock = threading.Lock()
+bedrock_worker_started = False
+bedrock_poller_started = False
 
-_BEDROCK_INTER_JOB_DELAY = 5.0
-_POLL_INTERVAL = 15.0
-_POLL_MAX_WAIT = 1800.0
+BEDROCK_INTER_JOB_DELAY_SECONDS = 5.0
+BEDROCK_POLL_INTERVAL_SECONDS = 15.0
+BEDROCK_POLL_MAX_WAIT_SECONDS = 1800.0
 
 
 def enqueue_bedrock_start(task_id: str, s3_uri: str, output_uri: str, filename: str, meta: dict) -> None:
     """Queue a Bedrock embedding start to be processed in the background."""
-    _bedrock_queue.put({
+    bedrock_queue.put({
         "task_id": task_id,
         "s3_uri": s3_uri,
         "output_uri": output_uri,
         "filename": filename,
         "meta": meta,
     })
-    _ensure_worker()
-    _ensure_poller()
+    ensure_worker_thread()
+    ensure_poller_thread()
 
 
-def _ensure_worker():
-    global _worker_started
-    if _worker_started:
+def ensure_worker_thread():
+    global bedrock_worker_started
+    if bedrock_worker_started:
         return
-    _worker_started = True
-    t = threading.Thread(target=_bedrock_worker, daemon=True, name="bedrock-worker")
+    bedrock_worker_started = True
+    t = threading.Thread(target=process_bedrock_queue, daemon=True, name="bedrock-worker")
     t.start()
     log.info("[QUEUE] Bedrock worker thread started")
 
 
-def _ensure_poller():
-    global _poller_started
-    if _poller_started:
+def ensure_poller_thread():
+    global bedrock_poller_started
+    if bedrock_poller_started:
         return
-    _poller_started = True
-    t = threading.Thread(target=_bedrock_poller, daemon=True, name="bedrock-poller")
+    bedrock_poller_started = True
+    t = threading.Thread(target=poll_bedrock_jobs, daemon=True, name="bedrock-poller")
     t.start()
     log.info("[POLLER] Bedrock poller thread started")
 
 
-def _bedrock_worker():
+def process_bedrock_queue():
     """Drains the queue one job at a time, with a delay between jobs to avoid throttling."""
     import random
     max_retries = 7
@@ -100,7 +100,7 @@ def _bedrock_worker():
     throttle_kw = ("Throttling", "Too many requests", "ThrottlingException", "Rate exceeded")
 
     while True:
-        job = _bedrock_queue.get()
+        job = bedrock_queue.get()
         task_id = job["task_id"]
         s3_uri = job["s3_uri"]
         output_uri = job["output_uri"]
@@ -115,9 +115,9 @@ def _bedrock_worker():
                 arn = result.get("invocation_arn", "")
                 log.info("[QUEUE] Bedrock started for task_id=%s", task_id)
 
-                _tasks[task_id]["status"] = "indexing"
-                _tasks[task_id]["invocation_arn"] = arn
-                _tasks[task_id]["output_s3_uri"] = output_uri
+                video_tasks[task_id]["status"] = "indexing"
+                video_tasks[task_id]["invocation_arn"] = arn
+                video_tasks[task_id]["output_s3_uri"] = output_uri
 
                 for rec in vs_index():
                     if rec.get("id") == task_id:
@@ -125,12 +125,12 @@ def _bedrock_worker():
                         break
                 vs_save()
 
-                with _poller_lock:
-                    _poller_jobs.append({
+                with bedrock_poller_lock:
+                    bedrock_poller_jobs.append({
                         "task_id": task_id,
                         "invocation_arn": arn,
                         "output_s3_uri": output_uri,
-                        "started_at": _time.monotonic(),
+                        "started_at": time.monotonic(),
                     })
                 success = True
                 break
@@ -140,11 +140,11 @@ def _bedrock_worker():
                 if is_throttle and attempt < max_retries:
                     delay = min(max_delay, base_delay * (2 ** (attempt - 1))) + random.uniform(0, 1.5)
                     log.warning("[QUEUE] %s throttled (attempt %d/%d), retry in %.1fs", filename, attempt, max_retries, delay)
-                    _time.sleep(delay)
+                    time.sleep(delay)
                     continue
                 log.error("[QUEUE] Bedrock start failed for task_id=%s (%s)", task_id, type(exc).__name__)
-                _tasks[task_id]["status"] = "failed"
-                _tasks[task_id]["error"] = msg
+                video_tasks[task_id]["status"] = "failed"
+                video_tasks[task_id]["error"] = msg
                 for rec in vs_index():
                     if rec.get("id") == task_id:
                         rec.setdefault("metadata", {})["status"] = "failed"
@@ -155,17 +155,17 @@ def _bedrock_worker():
                 break
 
         if success:
-            _time.sleep(_BEDROCK_INTER_JOB_DELAY)
+            time.sleep(BEDROCK_INTER_JOB_DELAY_SECONDS)
 
-        _bedrock_queue.task_done()
+        bedrock_queue.task_done()
 
 
-def _bedrock_poller():
+def poll_bedrock_jobs():
     """Periodically poll Bedrock for job completion and finalize videos."""
     while True:
-        _time.sleep(_POLL_INTERVAL)
-        with _poller_lock:
-            jobs = list(_poller_jobs)
+        time.sleep(BEDROCK_POLL_INTERVAL_SECONDS)
+        with bedrock_poller_lock:
+            jobs = list(bedrock_poller_jobs)
         if not jobs:
             continue
 
@@ -173,7 +173,7 @@ def _bedrock_poller():
         for job in jobs:
             task_id = job["task_id"]
             arn = job["invocation_arn"]
-            elapsed = _time.monotonic() - job["started_at"]
+            elapsed = time.monotonic() - job["started_at"]
             try:
                 inv = get_async_invocation(arn)
                 status = inv.get("status", "unknown").lower()
@@ -200,16 +200,16 @@ def _bedrock_poller():
                                 vs_save()
                     except Exception as exc:
                         log.warning("[POLLER] Failed to load embeddings for %s (%s)", task_id, type(exc).__name__)
-                    if task_id in _tasks:
-                        _tasks[task_id]["status"] = "ready"
+                    if task_id in video_tasks:
+                        video_tasks[task_id]["status"] = "ready"
                     invalidate_video_cache()
                     done_ids.append(task_id)
                 elif status == "failed":
                     err = inv.get("error", "Unknown Bedrock error")
                     log.error("[POLLER] Bedrock failed: %s -> %s", task_id, err)
-                    if task_id in _tasks:
-                        _tasks[task_id]["status"] = "failed"
-                        _tasks[task_id]["error"] = err
+                    if task_id in video_tasks:
+                        video_tasks[task_id]["status"] = "failed"
+                        video_tasks[task_id]["error"] = err
                     for rec in vs_index():
                         if rec.get("id") == task_id:
                             rec.setdefault("metadata", {})["status"] = "failed"
@@ -218,20 +218,20 @@ def _bedrock_poller():
                     vs_save()
                     invalidate_video_cache()
                     done_ids.append(task_id)
-                elif elapsed > _POLL_MAX_WAIT:
+                elif elapsed > BEDROCK_POLL_MAX_WAIT_SECONDS:
                     log.warning("[POLLER] Timed out waiting for %s (%.0fs)", task_id, elapsed)
                     done_ids.append(task_id)
             except Exception as exc:
                 log.debug("[POLLER] Error polling %s (%s)", task_id, type(exc).__name__)
 
         if done_ids:
-            with _poller_lock:
-                _poller_jobs[:] = [j for j in _poller_jobs if j["task_id"] not in done_ids]
+            with bedrock_poller_lock:
+                bedrock_poller_jobs[:] = [j for j in bedrock_poller_jobs if j["task_id"] not in done_ids]
 
 
 def get_insights_cache_dir(video_id: str) -> Path:
     """Local disk directory for cached insights (faces, object frames) for a video."""
-    return _INSIGHTS_CACHE_ROOT / video_id
+    return INSIGHTS_CACHE_ROOT / video_id
 
 
 def save_face_to_disk(video_id: str, face_id: int, image_base64: str) -> str | None:
@@ -317,7 +317,7 @@ def load_object_frame_from_disk(video_id: str, filename: str) -> bytes | None:
         return None
 
 
-_TINY_THUMB_WIDTH = 120
+TINY_THUMB_WIDTH = 120
 
 
 def make_tiny_thumbnail_b64(jpeg_bytes: bytes) -> str | None:
@@ -326,15 +326,15 @@ def make_tiny_thumbnail_b64(jpeg_bytes: bytes) -> str | None:
         return None
     try:
         from PIL import Image
-        import io as _io
-        img = Image.open(_io.BytesIO(jpeg_bytes))
+        import io
+        img = Image.open(io.BytesIO(jpeg_bytes))
         if img.mode != "RGB":
             img = img.convert("RGB")
         w, h = img.size
-        if w > _TINY_THUMB_WIDTH:
-            ratio = _TINY_THUMB_WIDTH / w
-            img = img.resize((_TINY_THUMB_WIDTH, max(1, int(h * ratio))), Image.LANCZOS)
-        buf = _io.BytesIO()
+        if w > TINY_THUMB_WIDTH:
+            ratio = TINY_THUMB_WIDTH / w
+            img = img.resize((TINY_THUMB_WIDTH, max(1, int(h * ratio))), Image.LANCZOS)
+        buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=40, optimize=True)
         return base64.b64encode(buf.getvalue()).decode("ascii")
     except Exception as e:
@@ -343,12 +343,12 @@ def make_tiny_thumbnail_b64(jpeg_bytes: bytes) -> str | None:
 
 
 def get_tasks():
-    return _tasks
+    return video_tasks
 
 
 def invalidate_video_cache():
-    global _video_list_cache
-    _video_list_cache = None
+    global video_list_cache
+    video_list_cache = None
 
 
 def compute_duration_seconds_from_embeddings(output_uri: str) -> float | None:
@@ -374,7 +374,7 @@ def compute_duration_seconds_from_embeddings(output_uri: str) -> float | None:
 def video_id_to_s3_uri(video_id: str) -> str | None:
     if not video_id:
         return None
-    task = _tasks.get(video_id)
+    task = video_tasks.get(video_id)
     if task and task.get("s3_uri"):
         return task["s3_uri"]
     entry = index_get_entry(video_id)
@@ -548,7 +548,7 @@ def parse_transcript_response(text: str) -> list[dict]:
             try:
                 arr = json.loads(candidate)
             except json.JSONDecodeError:
-                repaired = _repair_truncated_json_any(candidate)
+                repaired = repair_truncated_json_any(candidate)
                 if repaired:
                     try:
                         arr = json.loads(repaired)
@@ -557,7 +557,7 @@ def parse_transcript_response(text: str) -> list[dict]:
 
     # 3) Last resort: attempt truncation repair on the whole raw response (array or object).
     if arr is None:
-        repaired = _repair_truncated_json_any(raw)
+        repaired = repair_truncated_json_any(raw)
         if repaired:
             try:
                 parsed = json.loads(repaired)
@@ -577,11 +577,11 @@ def parse_transcript_response(text: str) -> list[dict]:
         time_str = str(t.get("time", t.get("timestamp", ""))).strip() or "0:00"
         text_str = str(t.get("text", t.get("content", ""))).strip()
         out.append({"time": time_str, "text": text_str})
-    out.sort(key=lambda s: _timestamp_seconds_for_sort(s["time"]))
+    out.sort(key=lambda s: timestamp_seconds_for_sort(s["time"]))
     return out
 
 
-def _timestamp_seconds_for_sort(ts: str) -> float:
+def timestamp_seconds_for_sort(ts: str) -> float:
     parts = str(ts).strip().split(":")
     if not parts:
         return 0.0
@@ -595,7 +595,7 @@ def _timestamp_seconds_for_sort(ts: str) -> float:
         return 0.0
 
 
-def _repair_json_string(s: str) -> str:
+def repair_json_string(s: str) -> str:
     """Best-effort fixes for common LLM JSON mistakes."""
     s = re.sub(r",\s*([}\]])", r"\1", s)
     s = re.sub(r':\s*"([^"]*?)"\s+or\s+"[^"]*?"(?:\s+or\s+"[^"]*?")*', r': "\1"', s)
@@ -603,7 +603,7 @@ def _repair_json_string(s: str) -> str:
     return s
 
 
-def _extract_outermost_json_object(text: str) -> str | None:
+def extract_outermost_json_object(text: str) -> str | None:
     """Find the outermost { ... } span, respecting strings so inner braces don't confuse depth."""
     start = text.find("{")
     if start < 0:
@@ -633,7 +633,7 @@ def _extract_outermost_json_object(text: str) -> str | None:
     return None
 
 
-def _repair_truncated_json(text: str) -> str | None:
+def repair_truncated_json(text: str) -> str | None:
     """Best-effort repair for JSON truncated mid-stream (e.g. model hit output token limit).
 
     Walks the text tracking nesting depth and string state, then appends
@@ -696,7 +696,7 @@ def _repair_truncated_json(text: str) -> str | None:
     return repair
 
 
-def _repair_truncated_json_any(text: str) -> str | None:
+def repair_truncated_json_any(text: str) -> str | None:
     """Repair JSON truncated mid-stream for either an object or an array."""
     if not text:
         return None
@@ -763,7 +763,7 @@ def _repair_truncated_json_any(text: str) -> str | None:
     return repair
 
 
-_ANALYSIS_REQUIRED_KEYS = {"title", "description", "riskLevel"}
+ANALYSIS_REQUIRED_KEYS = {"title", "description", "riskLevel"}
 
 
 def parse_video_analysis_response(text: str) -> dict | None:
@@ -777,23 +777,23 @@ def parse_video_analysis_response(text: str) -> dict | None:
 
     strategies: list[tuple[str, str]] = [
         ("direct", raw),
-        ("repaired", _repair_json_string(raw)),
+        ("repaired", repair_json_string(raw)),
     ]
-    outer = _extract_outermost_json_object(raw)
+    outer = extract_outermost_json_object(raw)
     if outer and outer != raw:
         strategies.append(("outermost_obj", outer))
-        strategies.append(("outermost_repaired", _repair_json_string(outer)))
+        strategies.append(("outermost_repaired", repair_json_string(outer)))
 
-    truncated = _repair_truncated_json(raw)
+    truncated = repair_truncated_json(raw)
     if truncated and truncated != raw:
         strategies.append(("truncated_repair", truncated))
-        strategies.append(("truncated_repaired", _repair_json_string(truncated)))
+        strategies.append(("truncated_repaired", repair_json_string(truncated)))
 
     for label, candidate in strategies:
         try:
             obj = json.loads(candidate)
             if isinstance(obj, dict):
-                has_keys = _ANALYSIS_REQUIRED_KEYS.issubset(obj.keys())
+                has_keys = ANALYSIS_REQUIRED_KEYS.issubset(obj.keys())
                 log.info("[PARSE] Strategy '%s' succeeded: keys=%s has_required=%s", label, list(obj.keys()), has_keys)
                 if has_keys:
                     if "truncated" in label:
@@ -857,7 +857,7 @@ def normalize_video_analysis(data: dict) -> dict:
                 "text": str(t.get("text", "")).strip(),
             })
 
-    def _timestamp_seconds(ts: str) -> float:
+    def parse_timestamp_seconds(ts: str) -> float:
         """Parse M:SS or M:MM:SS to seconds for sorting."""
         parts = str(ts).strip().split(":")
         if not parts:
@@ -871,7 +871,7 @@ def normalize_video_analysis(data: dict) -> dict:
         except (ValueError, IndexError):
             return 0.0
 
-    out_transcript.sort(key=lambda seg: _timestamp_seconds(seg["time"]))
+    out_transcript.sort(key=lambda seg: parse_timestamp_seconds(seg["time"]))
 
     # Optional: people (names/identifiers from analysis or transcript)
     people = data.get("people")
@@ -951,7 +951,7 @@ def get_frame_bytes(video_id: str, t: float) -> bytes | None:
     if not url or t < 0:
         return None
     try:
-        t0 = _time.perf_counter()
+        t0 = time.perf_counter()
         result = subprocess.run(
             [
                 "ffmpeg", "-y", "-loglevel", "error", "-ss", str(t),
@@ -1105,20 +1105,20 @@ def parse_detect_response(text: str) -> dict:
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        outer = _extract_outermost_json_object(raw)
+        outer = extract_outermost_json_object(raw)
         if outer:
             try:
                 parsed = json.loads(outer)
             except json.JSONDecodeError:
                 pass
         if parsed is None:
-            repaired = _repair_truncated_json(raw)
+            repaired = repair_truncated_json(raw)
             if repaired:
                 try:
                     parsed = json.loads(repaired)
                     log.warning("[DETECT_PARSE] Recovered truncated JSON via repair")
                 except json.JSONDecodeError:
-                    repaired2 = _repair_json_string(repaired)
+                    repaired2 = repair_json_string(repaired)
                     try:
                         parsed = json.loads(repaired2)
                         log.warning("[DETECT_PARSE] Recovered truncated JSON via repair+fix")
@@ -1180,7 +1180,7 @@ def parse_detect_response(text: str) -> dict:
     return {"objects": objects, "face_keyframes": face_keyframes}
 
 
-def _cosine(a, b):
+def cosine_similarity(a, b):
     va = np.array(a, dtype=np.float64)
     vb = np.array(b, dtype=np.float64)
     na, nb = np.linalg.norm(va), np.linalg.norm(vb)
@@ -1189,7 +1189,7 @@ def _cosine(a, b):
     return float(np.dot(va, vb) / (na * nb))
 
 
-def _clip_list_for_face_search(all_clips: list[dict], visual_only: bool) -> list[dict]:
+def clip_list_for_face_search(all_clips: list[dict], visual_only: bool) -> list[dict]:
     """Filter to clip-scope embeddings; for face/entity search use only visual (not audio)."""
     clips = [c for c in all_clips if c.get("embeddingScope") == "clip"]
     if visual_only:
@@ -1205,12 +1205,12 @@ def clip_search(
     visual_only: bool = False,
 ) -> list[dict]:
     all_clips = load_video_embeddings_from_s3(output_s3_uri)
-    clips = _clip_list_for_face_search(all_clips, visual_only)
+    clips = clip_list_for_face_search(all_clips, visual_only)
     if not clips:
         return []
     scored = []
     for c in clips:
-        sim = _cosine(query_emb, c["embedding"])
+        sim = cosine_similarity(query_emb, c["embedding"])
         if min_score is not None and sim < min_score:
             continue
         scored.append({
@@ -1262,13 +1262,13 @@ def best_clip_score_and_count(
     avg) and multiplicity (count) favor the real entity video over one high outlier.
     """
     all_clips = load_video_embeddings_from_s3(output_s3_uri)
-    clips = _clip_list_for_face_search(all_clips, visual_only)
+    clips = clip_list_for_face_search(all_clips, visual_only)
     if not clips:
         return 0.0, 0, 0.0
     sims: list[float] = []
     count = 0
     for c in clips:
-        sim = _cosine(query_emb, c["embedding"])
+        sim = cosine_similarity(query_emb, c["embedding"])
         sims.append(sim)
         if min_score is not None and sim >= min_score:
             count += 1
@@ -1292,12 +1292,12 @@ def clips_above_threshold(
     No FFmpeg or frame sampling — full coverage across the whole video.
     """
     all_clips = load_video_embeddings_from_s3(output_s3_uri)
-    clips = _clip_list_for_face_search(all_clips, visual_only)
+    clips = clip_list_for_face_search(all_clips, visual_only)
     if not clips:
         return []
     scored = []
     for c in clips:
-        sim = _cosine(query_emb, c["embedding"])
+        sim = cosine_similarity(query_emb, c["embedding"])
         if sim < min_score:
             continue
         scored.append({
@@ -1310,7 +1310,7 @@ def clips_above_threshold(
     return scored[:max_clips]
 
 
-def _clip_timestamps_for_face_sampling(
+def clip_timestamps_for_face_sampling(
     clips: list[dict],
     entity_emb: list[float],
     max_clips: int = 5,
@@ -1328,7 +1328,7 @@ def _clip_timestamps_for_face_sampling(
         return []
     scored = []
     for c in clips:
-        sim = _cosine(entity_emb, c["embedding"])
+        sim = cosine_similarity(entity_emb, c["embedding"])
         start = float(c.get("startSec", 0))
         end = float(c.get("endSec", start + 1))
         scored.append({"start": start, "end": end, "score": sim})
@@ -1378,11 +1378,11 @@ def face_match_score_in_video(
     from app.utils.faces import detect_and_crop_faces
     log.info("face_match_score_in_video: video_id=%s max_frames=%d", video_id, max_frames)
     all_clips = load_video_embeddings_from_s3(output_s3_uri)
-    clips = _clip_list_for_face_search(all_clips, visual_only=True)
+    clips = clip_list_for_face_search(all_clips, visual_only=True)
     if not clips:
         log.warning("No visual clips found for video_id=%s", video_id)
         return 0.0, []
-    timestamps = _clip_timestamps_for_face_sampling(
+    timestamps = clip_timestamps_for_face_sampling(
         clips, entity_emb, max_clips=6, points_per_clip=2, max_timestamps=max_frames
     )
     if not timestamps:
@@ -1406,7 +1406,7 @@ def face_match_score_in_video(
                 face_bytes = base64.b64decode(embed_b64)
                 media = media_source_base64(face_bytes)
                 face_emb = embed_image(media)
-                sim = _cosine(entity_emb, face_emb)
+                sim = cosine_similarity(entity_emb, face_emb)
                 faces_compared += 1
                 if sim > best_score:
                     best_score = sim
@@ -1615,11 +1615,11 @@ def get_search_embedding_from_request(
 
 
 def get_video_list_cache():
-    global _video_list_cache, _video_list_cache_ts
-    return _video_list_cache, _video_list_cache_ts, _VIDEO_LIST_CACHE_TTL
+    global video_list_cache, video_list_cache_timestamp
+    return video_list_cache, video_list_cache_timestamp, VIDEO_LIST_CACHE_TTL
 
 
 def set_video_list_cache(result):
-    global _video_list_cache, _video_list_cache_ts
-    _video_list_cache = result
-    _video_list_cache_ts = _time.monotonic()
+    global video_list_cache, video_list_cache_timestamp
+    video_list_cache = result
+    video_list_cache_timestamp = time.monotonic()

@@ -1111,8 +1111,8 @@ export default function Dashboard({ onOpenUpload }: DashboardProps) {
     }
 
     const body: Record<string, unknown> = {
-      top_k: (hasEntities || hasImage) ? 12 : 18,
-      clips_per_video: (hasEntities || hasImage) ? 2 : 3,
+      top_k: (hasEntities || hasImage) ? 6 : 10,
+      clips_per_video: (hasEntities || hasImage) ? 5 : 12,
       // When searching with image/entity, do not request document results
       doc_top_k: (hasEntities || hasImage) ? 0 : 10,
     }

@@ -12,38 +12,38 @@ log = logging.getLogger("app.services.bedrock_marengo")
 MARENGO_MODEL_ID = "twelvelabs.marengo-embed-3-0-v1:0"
 REGION_PREFIX = {"us-east-1": "us", "eu-west-1": "eu", "ap-northeast-2": "ap"}
 
-_client_lock = threading.Lock()
-_cached_client = None
-_cached_region: str | None = None
+client_lock = threading.Lock()
+cached_client = None
+cached_region: str | None = None
 
 
-def _bedrock_client():
-    global _cached_client, _cached_region
+def get_bedrock_client():
+    global cached_client, cached_region
     region = os.environ.get("AWS_REGION", "us-east-1")
-    if _cached_client is not None and _cached_region == region:
-        return _cached_client
-    with _client_lock:
-        if _cached_client is not None and _cached_region == region:
-            return _cached_client
+    if cached_client is not None and cached_region == region:
+        return cached_client
+    with client_lock:
+        if cached_client is not None and cached_region == region:
+            return cached_client
         cfg = Config(
             region_name=region,
             connect_timeout=15,
             read_timeout=300,
             retries={"max_attempts": 5, "mode": "adaptive"},
         )
-        _cached_client = boto3.client("bedrock-runtime", config=cfg)
-        _cached_region = region
+        cached_client = boto3.client("bedrock-runtime", config=cfg)
+        cached_region = region
         log.info("Created bedrock-runtime client (region=%s, adaptive retries)", region)
-        return _cached_client
+        return cached_client
 
 
-def _inference_profile_id():
+def get_inference_profile_id():
     region = os.environ.get("AWS_REGION", "us-east-1")
     prefix = REGION_PREFIX.get(region, "us")
     return f"{prefix}.{MARENGO_MODEL_ID}"
 
 
-def _extract_embedding(response) -> list[float]:
+def extract_embedding(response) -> list[float]:
     out = json.loads(response["body"].read().decode("utf-8"))
     data = out.get("data")
     if isinstance(data, list) and data:
@@ -53,33 +53,33 @@ def _extract_embedding(response) -> list[float]:
     return []
 
 
-def _invoke(body: dict) -> list[float]:
-    client = _bedrock_client()
+def invoke_embedding_model(body: dict) -> list[float]:
+    client = get_bedrock_client()
     response = client.invoke_model(
-        modelId=_inference_profile_id(),
+        modelId=get_inference_profile_id(),
         body=json.dumps(body),
         contentType="application/json",
         accept="application/json",
     )
-    return _extract_embedding(response)
+    return extract_embedding(response)
 
 
 def embed_text(text: str) -> list[float]:
-    return _invoke({
+    return invoke_embedding_model({
         "inputType": "text",
         "text": {"inputText": text[:500]},
     })
 
 
 def embed_image(media_source: dict) -> list[float]:
-    return _invoke({
+    return invoke_embedding_model({
         "inputType": "image",
         "image": {"mediaSource": media_source},
     })
 
 
 def embed_text_image(input_text: str, media_source: dict) -> list[float]:
-    return _invoke({
+    return invoke_embedding_model({
         "inputType": "text_image",
         "text_image": {
             "inputText": input_text[:500],
@@ -93,7 +93,7 @@ def media_source_base64(image_bytes: bytes) -> dict:
     return {"base64String": b64}
 
 
-def _get_account_id() -> str:
+def get_account_id() -> str:
     acct = os.environ.get("AWS_ACCOUNT_ID", "")
     if acct:
         return acct
@@ -113,8 +113,8 @@ def start_video_embedding(
     output_s3_uri: str,
     bucket_owner: str | None = None,
 ) -> dict:
-    client = _bedrock_client()
-    owner = bucket_owner or _get_account_id()
+    client = get_bedrock_client()
+    owner = bucket_owner or get_account_id()
     body = {
         "inputType": "video",
         "video": {
@@ -135,7 +135,7 @@ def start_video_embedding(
 
 
 def get_async_invocation(invocation_arn: str) -> dict:
-    client = _bedrock_client()
+    client = get_bedrock_client()
     resp = client.get_async_invoke(invocationArn=invocation_arn)
     raw_status = resp.get("status", "unknown")
     result = {

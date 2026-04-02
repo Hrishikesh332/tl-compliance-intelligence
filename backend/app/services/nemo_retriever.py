@@ -38,100 +38,100 @@ EMBED_MAX_CHARS = 1200
 # In-memory document index with S3 persistence
 # ---------------------------------------------------------------------------
 
-_doc_index: list[dict] = []
-_doc_index_ts: float = 0.0
-_DOC_INDEX_TTL: float = 30.0
+document_index: list[dict] = []
+document_index_timestamp: float = 0.0
+DOC_INDEX_TTL_SECONDS: float = 30.0
 
-_BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
-_LOCAL_DOC_INDEX = _BACKEND_DIR / "data" / "nemo-docs.json"
+BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+LOCAL_DOC_INDEX_PATH = BACKEND_DIR / "data" / "nemo-docs.json"
 
 
-def _s3():
+def get_s3_client():
     return boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1"))
 
 
-def _use_s3() -> bool:
+def is_s3_enabled() -> bool:
     return bool(S3_BUCKET)
 
 
-def _load_doc_index() -> list[dict]:
+def load_document_index() -> list[dict]:
     """Load the document index from S3 (or local fallback), with TTL cache."""
-    global _doc_index, _doc_index_ts
+    global document_index, document_index_timestamp
 
-    if time.monotonic() - _doc_index_ts < _DOC_INDEX_TTL:
-        return _doc_index
+    if time.monotonic() - document_index_timestamp < DOC_INDEX_TTL_SECONDS:
+        return document_index
 
-    if _use_s3():
+    if is_s3_enabled():
         try:
-            resp = _s3().get_object(Bucket=S3_BUCKET, Key=S3_DOC_INDEX_KEY)
-            _doc_index = json.loads(resp["Body"].read().decode("utf-8"))
-            _doc_index_ts = time.monotonic()
-            return _doc_index
+            resp = get_s3_client().get_object(Bucket=S3_BUCKET, Key=S3_DOC_INDEX_KEY)
+            document_index = json.loads(resp["Body"].read().decode("utf-8"))
+            document_index_timestamp = time.monotonic()
+            return document_index
         except Exception as exc:
             err_code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
             if err_code in ("NoSuchKey", "NoSuchBucket", "AccessDenied"):
-                _doc_index = []
-                _doc_index_ts = time.monotonic()
+                document_index = []
+                document_index_timestamp = time.monotonic()
             else:
                 log.warning("Failed to load doc index from S3 (%s)", type(exc).__name__)
-            return _doc_index
+            return document_index
 
-    if _LOCAL_DOC_INDEX.exists():
+    if LOCAL_DOC_INDEX_PATH.exists():
         try:
-            _doc_index = json.loads(_LOCAL_DOC_INDEX.read_text())
+            document_index = json.loads(LOCAL_DOC_INDEX_PATH.read_text())
         except Exception:
-            _doc_index = []
-    _doc_index_ts = time.monotonic()
-    return _doc_index
+            document_index = []
+    document_index_timestamp = time.monotonic()
+    return document_index
 
 
-def _save_doc_index() -> None:
+def save_document_index() -> None:
     """Persist the document index to S3 (or local fallback)."""
-    global _doc_index_ts
+    global document_index_timestamp
 
-    payload = json.dumps(_doc_index).encode("utf-8")
+    payload = json.dumps(document_index).encode("utf-8")
 
-    if _use_s3():
+    if is_s3_enabled():
         try:
-            _s3().put_object(
+            get_s3_client().put_object(
                 Bucket=S3_BUCKET,
                 Key=S3_DOC_INDEX_KEY,
                 Body=payload,
                 ContentType="application/json",
             )
-            _doc_index_ts = time.monotonic()
+            document_index_timestamp = time.monotonic()
         except Exception as exc:
             log.error("Failed to save doc index to S3 (%s)", type(exc).__name__)
     else:
-        _LOCAL_DOC_INDEX.parent.mkdir(parents=True, exist_ok=True)
-        _LOCAL_DOC_INDEX.write_bytes(payload)
-        _doc_index_ts = time.monotonic()
+        LOCAL_DOC_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
+        LOCAL_DOC_INDEX_PATH.write_bytes(payload)
+        document_index_timestamp = time.monotonic()
 
 
 def delete_doc(doc_id: str) -> int:
     """Remove all chunks for a document from the index. Returns count removed."""
-    _load_doc_index()
-    before = len(_doc_index)
-    _doc_index[:] = [r for r in _doc_index if r.get("doc_id") != doc_id]
-    removed = before - len(_doc_index)
+    load_document_index()
+    before = len(document_index)
+    document_index[:] = [r for r in document_index if r.get("doc_id") != doc_id]
+    removed = before - len(document_index)
     if removed > 0:
-        _save_doc_index()
+        save_document_index()
         log.info("Deleted %d chunk(s) for doc %s", removed, doc_id)
     return removed
 
 
 def clear_doc_index() -> int:
     """Delete the entire document index (all documents). Returns count removed."""
-    _load_doc_index()
-    removed = len(_doc_index)
-    _doc_index.clear()
-    _save_doc_index()
+    load_document_index()
+    removed = len(document_index)
+    document_index.clear()
+    save_document_index()
     log.info("Cleared document index: removed %d chunk(s)", removed)
     return removed
 
 
 # Eagerly load on import so the index is ready
-_load_doc_index()
+load_document_index()
 
 # ---------------------------------------------------------------------------
 # S3 document file upload (dedicated prefix)
@@ -144,11 +144,11 @@ def upload_document(file_bytes: bytes, filename: str) -> dict:
     ext = os.path.splitext(filename)[1] or ".pdf"
     key = f"{S3_DOC_PREFIX}/{doc_id}{ext}"
 
-    if _use_s3():
-        _s3().put_object(Bucket=S3_BUCKET, Key=key, Body=file_bytes)
+    if is_s3_enabled():
+        get_s3_client().put_object(Bucket=S3_BUCKET, Key=key, Body=file_bytes)
         log.info("Uploaded document %s to S3", doc_id)
     else:
-        local_dir = _BACKEND_DIR / "data" / S3_DOC_PREFIX
+        local_dir = BACKEND_DIR / "data" / S3_DOC_PREFIX
         local_dir.mkdir(parents=True, exist_ok=True)
         (local_dir / f"{doc_id}{ext}").write_bytes(file_bytes)
         log.info("Saved document %s locally", doc_id)
@@ -156,18 +156,18 @@ def upload_document(file_bytes: bytes, filename: str) -> dict:
     return {"doc_id": doc_id, "s3_key": key, "filename": filename}
 
 
-def _store_pdf(file_path: str, doc_id: str) -> dict:
+def store_pdf_document(file_path: str, doc_id: str) -> dict:
     """Persist the PDF to S3 (or local data dir) and return location info."""
     ext = os.path.splitext(file_path)[1] or ".pdf"
     key = f"{S3_DOC_PREFIX}/{doc_id}{ext}"
     file_bytes = Path(file_path).read_bytes()
 
-    if _use_s3():
-        _s3().put_object(Bucket=S3_BUCKET, Key=key, Body=file_bytes)
+    if is_s3_enabled():
+        get_s3_client().put_object(Bucket=S3_BUCKET, Key=key, Body=file_bytes)
         log.info("Stored PDF %s to S3", doc_id)
         return {"pdf_s3_key": key, "pdf_s3_uri": f"s3://{S3_BUCKET}/{key}"}
 
-    local_dir = _BACKEND_DIR / "data" / S3_DOC_PREFIX
+    local_dir = BACKEND_DIR / "data" / S3_DOC_PREFIX
     local_dir.mkdir(parents=True, exist_ok=True)
     dest = local_dir / f"{doc_id}{ext}"
     dest.write_bytes(file_bytes)
@@ -175,7 +175,7 @@ def _store_pdf(file_path: str, doc_id: str) -> dict:
     return {"pdf_local_path": str(dest)}
 
 
-def _match_video_for_doc(filename: str) -> dict | None:
+def match_video_for_document(filename: str) -> dict | None:
     """Find a video in the index whose filename closely matches the document name."""
     from app.services.vector_store import list_entries as vs_list
 
@@ -202,23 +202,23 @@ def _match_video_for_doc(filename: str) -> dict | None:
 # NeMo Retriever extraction pipeline
 # ---------------------------------------------------------------------------
 
-_pipeline_started = False
+nemo_pipeline_started = False
 
 # Set when nv-ingest is missing (e.g. on Render where ray has no wheels).
-_NV_INGEST_UNAVAILABLE: str | None = None
+nv_ingest_unavailable_reason: str | None = None
 
 
-def _check_nv_ingest() -> None:
+def check_nv_ingest() -> None:
     """Raise if nv-ingest stack is not installed (optional dependency)."""
-    if _NV_INGEST_UNAVAILABLE:
-        raise RuntimeError(_NV_INGEST_UNAVAILABLE)
+    if nv_ingest_unavailable_reason:
+        raise RuntimeError(nv_ingest_unavailable_reason)
 
 
-def _ensure_pipeline() -> None:
+def ensure_nemo_pipeline() -> None:
     """Start the NeMo Retriever Ray pipeline subprocess (lazy, once)."""
-    global _pipeline_started, _NV_INGEST_UNAVAILABLE
-    _check_nv_ingest()
-    if _pipeline_started:
+    global nemo_pipeline_started, nv_ingest_unavailable_reason
+    check_nv_ingest()
+    if nemo_pipeline_started:
         return
     try:
         from nv_ingest.framework.orchestration.ray.util.pipeline.pipeline_runners import (
@@ -230,17 +230,17 @@ def _ensure_pipeline() -> None:
             disable_dynamic_scaling=True,
             run_in_subprocess=True,
         )
-        _pipeline_started = True
+        nemo_pipeline_started = True
         log.info("NeMo Retriever pipeline started")
     except ImportError as exc:
-        global _NV_INGEST_UNAVAILABLE
-        _NV_INGEST_UNAVAILABLE = (
+        global nv_ingest_unavailable_reason
+        nv_ingest_unavailable_reason = (
             "Document extraction requires the optional nv-ingest stack (ray/nv-ingest), "
             "which is not installed on this environment. For cloud deploy use the main "
             "requirements.txt; for local doc ingestion install: pip install -r requirements-optional.txt"
         )
         log.warning("nv-ingest not available (%s)", type(exc).__name__)
-        raise RuntimeError(_NV_INGEST_UNAVAILABLE) from exc
+        raise RuntimeError(nv_ingest_unavailable_reason) from exc
     except Exception as exc:
         log.error("Failed to start NeMo pipeline (%s)", type(exc).__name__)
         raise
@@ -252,21 +252,21 @@ def extract_document(file_path: str) -> list[str]:
 
     Returns a list of text strings (one per page / content block).
     """
-    _ensure_pipeline()
+    ensure_nemo_pipeline()
 
     try:
         from nv_ingest_client.client import Ingestor, NvIngestClient
         from nv_ingest_api.util.message_brokers.simple_message_broker import SimpleClient
         from nv_ingest_client.util.process_json_files import ingest_json_results_to_blob
     except ImportError as exc:
-        global _NV_INGEST_UNAVAILABLE
-        if _NV_INGEST_UNAVAILABLE is None:
-            _NV_INGEST_UNAVAILABLE = (
+        global nv_ingest_unavailable_reason
+        if nv_ingest_unavailable_reason is None:
+            nv_ingest_unavailable_reason = (
                 "Document extraction requires the optional nv-ingest stack (ray/nv-ingest), "
                 "which is not installed on this environment. For cloud deploy use the main "
                 "requirements.txt; for local doc ingestion install: pip install -r requirements-optional.txt"
             )
-        raise RuntimeError(_NV_INGEST_UNAVAILABLE) from exc
+        raise RuntimeError(nv_ingest_unavailable_reason) from exc
 
     client = NvIngestClient(
         message_client_allocator=SimpleClient,
@@ -306,7 +306,7 @@ def extract_document(file_path: str) -> list[str]:
 # Smart PDF extraction + semantic chunking
 # ---------------------------------------------------------------------------
 
-_REPORT_NOISE = [
+REPORT_NOISE_PATTERNS = [
     re.compile(r"^--\s*\d+\s+of\s+\d+\s*--$"),
     re.compile(r"^TwelveLabs\s*·.*Page\s+\d+\s+of\s+\d+"),
     re.compile(r"^TwelveLabs$"),
@@ -314,7 +314,7 @@ _REPORT_NOISE = [
     re.compile(r"^Compliance Intelligence Report\b"),
 ]
 
-_SECTION_PATTERNS: list[tuple[re.Pattern, str]] = [
+SECTION_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"(?i)^Executive\s+summary"), "executive_summary"),
     (re.compile(r"(?i)^Description$"), "description"),
     (re.compile(r"(?i)^Categories$"), "categories"),
@@ -327,16 +327,16 @@ _SECTION_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"(?i)^Level:\s"), "risk_assessment"),
 ]
 
-_TS_LINE = re.compile(r"^\d{1,2}:\d{2}\b")
+TIMESTAMP_LINE_PATTERN = re.compile(r"^\d{1,2}:\d{2}\b")
 
 
-def _extract_pdf_text(file_path: str) -> str:
+def extract_pdf_text(file_path: str) -> str:
     """Extract full text from a PDF using the best available library."""
     errors: list[str] = []
     extractors = [
-        ("PyMuPDF", _extract_fitz),
-        ("pdfplumber", _extract_pdfplumber),
-        ("PyPDF2", _extract_pypdf2),
+        ("PyMuPDF", extract_pdf_text_with_fitz),
+        ("pdfplumber", extract_pdf_text_with_pdfplumber),
+        ("PyPDF2", extract_pdf_text_with_pypdf2),
     ]
     for lib_name, func in extractors:
         try:
@@ -351,7 +351,7 @@ def _extract_pdf_text(file_path: str) -> str:
     raise RuntimeError(f"No PDF library could extract text: {'; '.join(errors)}")
 
 
-def _extract_fitz(path: str) -> str:
+def extract_pdf_text_with_fitz(path: str) -> str:
     import fitz
     doc = fitz.open(path)
     pages = [page.get_text() for page in doc]
@@ -359,41 +359,41 @@ def _extract_fitz(path: str) -> str:
     return "\n\n".join(pages)
 
 
-def _extract_pdfplumber(path: str) -> str:
+def extract_pdf_text_with_pdfplumber(path: str) -> str:
     import pdfplumber
     with pdfplumber.open(path) as pdf:
         return "\n\n".join(p.extract_text() or "" for p in pdf.pages)
 
 
-def _extract_pypdf2(path: str) -> str:
+def extract_pdf_text_with_pypdf2(path: str) -> str:
     from PyPDF2 import PdfReader
     reader = PdfReader(path)
     return "\n\n".join(p.extract_text() or "" for p in reader.pages)
 
 
-def _clean_lines(lines: list[str]) -> list[str]:
+def clean_report_lines(lines: list[str]) -> list[str]:
     """Remove report boilerplate headers / footers / page markers."""
-    return [ln for ln in lines if not any(p.match(ln.strip()) for p in _REPORT_NOISE)]
+    return [ln for ln in lines if not any(p.match(ln.strip()) for p in REPORT_NOISE_PATTERNS)]
 
 
-def _detect_section(line: str) -> str | None:
+def detect_report_section(line: str) -> str | None:
     stripped = line.strip()
-    for pattern, name in _SECTION_PATTERNS:
+    for pattern, name in SECTION_PATTERNS:
         if pattern.match(stripped):
             return name
     return None
 
 
-def _parse_sections(text: str) -> list[tuple[str, str]]:
+def parse_report_sections(text: str) -> list[tuple[str, str]]:
     """Split cleaned text into (section_name, section_text) pairs,
     merging adjacent tiny sections that belong together."""
-    lines = _clean_lines(text.split("\n"))
+    lines = clean_report_lines(text.split("\n"))
     raw_sections: list[tuple[str, list[str]]] = []
     cur_name = "overview"
     cur_lines: list[str] = []
 
     for line in lines:
-        sec = _detect_section(line.strip())
+        sec = detect_report_section(line.strip())
         if sec:
             if cur_lines:
                 raw_sections.append((cur_name, cur_lines))
@@ -418,13 +418,13 @@ def _parse_sections(text: str) -> list[tuple[str, str]]:
     return merged
 
 
-def _chunk_transcript(text: str) -> list[str]:
+def chunk_transcript_section(text: str) -> list[str]:
     """Split a transcript section into overlapping windows of segments."""
     lines = text.split("\n")
     segments: list[str] = []
     buf: list[str] = []
     for line in lines:
-        if _TS_LINE.match(line.strip()) and buf:
+        if TIMESTAMP_LINE_PATTERN.match(line.strip()) and buf:
             segments.append("\n".join(buf).strip())
             buf = [line]
         else:
@@ -434,7 +434,7 @@ def _chunk_transcript(text: str) -> list[str]:
         if joined:
             segments.append(joined)
 
-    if segments and not _TS_LINE.match(segments[0].split("\n")[0].strip()):
+    if segments and not TIMESTAMP_LINE_PATTERN.match(segments[0].split("\n")[0].strip()):
         header = segments.pop(0)
         if segments:
             segments[0] = header + "\n" + segments[0]
@@ -452,7 +452,7 @@ def _chunk_transcript(text: str) -> list[str]:
     return chunks
 
 
-def _chunk_with_overlap(
+def chunk_text_with_overlap(
     text: str,
     max_chars: int = CHUNK_MAX_CHARS,
     overlap: int = CHUNK_OVERLAP_CHARS,
@@ -479,31 +479,31 @@ def _chunk_with_overlap(
     return chunks
 
 
-def _split_into_semantic_chunks(file_path: str) -> list[tuple[str, str]]:
+def split_into_semantic_chunks(file_path: str) -> list[tuple[str, str]]:
     """Extract text from a PDF and return (section, text) chunk pairs."""
-    raw = _extract_pdf_text(file_path)
-    sections = _parse_sections(raw)
+    raw = extract_pdf_text(file_path)
+    sections = parse_report_sections(raw)
 
     result: list[tuple[str, str]] = []
     for section_name, section_text in sections:
         if "transcript" in section_name:
-            for chunk in _chunk_transcript(section_text):
+            for chunk in chunk_transcript_section(section_text):
                 result.append((section_name, chunk))
         elif len(section_text) > CHUNK_MAX_CHARS:
-            for chunk in _chunk_with_overlap(section_text):
+            for chunk in chunk_text_with_overlap(section_text):
                 result.append((section_name, chunk))
         else:
             result.append((section_name, section_text))
 
     if not result:
-        for chunk in _chunk_with_overlap(raw):
+        for chunk in chunk_text_with_overlap(raw):
             result.append(("content", chunk))
 
     return result
 
 
 
-def _embed_client():
+def create_embedding_client():
     from openai import OpenAI
 
     return OpenAI(
@@ -512,9 +512,9 @@ def _embed_client():
     )
 
 
-def _embed_via_requests(texts: list[str], input_type: str) -> list[list[float]]:
+def embed_via_requests(texts: list[str], input_type: str) -> list[list[float]]:
     """Call NVIDIA embeddings API directly with requests to guarantee input_type is sent."""
-    import requests as _req
+    import requests
 
     t0 = time.perf_counter()
     log.info(
@@ -523,7 +523,7 @@ def _embed_via_requests(texts: list[str], input_type: str) -> list[list[float]]:
         input_type,
         len(texts),
     )
-    resp = _req.post(
+    resp = requests.post(
         "https://integrate.api.nvidia.com/v1/embeddings",
         headers={
             "Authorization": f"Bearer {NVIDIA_API_KEY}",
@@ -556,14 +556,14 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
     if not NVIDIA_API_KEY:
         raise RuntimeError("NVIDIA_API_KEY is not set — cannot embed documents")
     truncated = [t[:EMBED_MAX_CHARS] for t in texts]
-    return _embed_via_requests(truncated, "passage")
+    return embed_via_requests(truncated, "passage")
 
 
 def embed_query(query: str) -> list[float]:
     """Embed a single search query."""
     if not NVIDIA_API_KEY:
         raise RuntimeError("NVIDIA_API_KEY is not set — cannot embed documents")
-    return _embed_via_requests([query[:EMBED_MAX_CHARS]], "query")[0]
+    return embed_via_requests([query[:EMBED_MAX_CHARS]], "query")[0]
 
 
 
@@ -577,7 +577,7 @@ def add_chunks(
     extra_metadata: dict | None = None,
 ) -> int:
     """Add extracted & embedded document chunks to the index and persist."""
-    _load_doc_index()
+    load_document_index()
 
     added = 0
     for i, (text, emb) in enumerate(zip(chunks, embeddings)):
@@ -595,19 +595,19 @@ def add_chunks(
             rec["section"] = sections[i]
         if extra_metadata:
             rec.update(extra_metadata)
-        _doc_index.append(rec)
+        document_index.append(rec)
         added += 1
 
-    _save_doc_index()
+    save_document_index()
     log.info("Stored %d chunk(s) for doc %s", added, doc_id)
     return added
 
 
 def search_docs(query_embedding: list[float], top_k: int = 10) -> list[dict]:
     """Cosine-similarity search over the document index."""
-    _load_doc_index()
+    load_document_index()
 
-    if not _doc_index:
+    if not document_index:
         return []
 
     qv = np.array(query_embedding, dtype=np.float64)
@@ -621,7 +621,7 @@ def search_docs(query_embedding: list[float], top_k: int = 10) -> list[dict]:
     scored: list[dict] = []
     skipped_mismatch = 0
     skipped_invalid = 0
-    for rec in _doc_index:
+    for rec in document_index:
         emb = rec.get("embedding")
         if not isinstance(emb, list) or not emb:
             skipped_invalid += 1
@@ -657,10 +657,10 @@ def search_docs(query_embedding: list[float], top_k: int = 10) -> list[dict]:
 
 def list_docs() -> list[dict]:
     """Return a deduplicated list of ingested documents with chunk counts."""
-    _load_doc_index()
+    load_document_index()
 
     seen: dict[str, dict] = {}
-    for rec in _doc_index:
+    for rec in document_index:
         did = rec["doc_id"]
         if did not in seen:
             seen[did] = {"doc_id": did, "filename": rec["filename"], "chunks": 0}
@@ -670,10 +670,10 @@ def list_docs() -> list[dict]:
 
 def list_chunks(include_text: bool = True) -> list[dict]:
 
-    _load_doc_index()
+    load_document_index()
 
     out: list[dict] = []
-    for rec in _doc_index:
+    for rec in document_index:
         chunk = {k: v for k, v in rec.items() if k != "embedding"}
         if not include_text:
             chunk.pop("text", None)
@@ -696,13 +696,13 @@ def ingest_document(file_path: str, doc_id: str, filename: str) -> dict:
 
     extra: dict = {}
     try:
-        pdf_info = _store_pdf(file_path, doc_id)
+        pdf_info = store_pdf_document(file_path, doc_id)
         extra.update(pdf_info)
     except Exception as exc:
         log.warning("Could not persist PDF for %s (%s)", doc_id, type(exc).__name__)
 
     try:
-        video_match = _match_video_for_doc(filename)
+        video_match = match_video_for_document(filename)
         if video_match:
             extra.update(video_match)
             log.info("Linked doc %s to video %s (%s)", doc_id, video_match["video_id"], video_match["video_filename"])
@@ -717,7 +717,7 @@ def ingest_document(file_path: str, doc_id: str, filename: str) -> dict:
 
     if ext == ".pdf":
         try:
-            pairs = _split_into_semantic_chunks(file_path)
+            pairs = split_into_semantic_chunks(file_path)
             sections = [s for s, _ in pairs]
             chunks = [t for _, t in pairs]
             log.info("Smart PDF chunking produced %d chunks for doc %s", len(chunks), doc_id)
@@ -745,7 +745,7 @@ def reingest_documents(
     documents_dir: str | Path | None = None,
 ) -> dict:
 
-    default_dir = _BACKEND_DIR.parent / "documents"
+    default_dir = BACKEND_DIR.parent / "documents"
     dir_path = Path(documents_dir).resolve() if documents_dir else default_dir
     if not dir_path.is_dir():
         dir_path.mkdir(parents=True, exist_ok=True)

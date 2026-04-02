@@ -12,17 +12,17 @@ from app.services.bedrock_marengo import embed_image, media_source_base64
 log = logging.getLogger("app.utils.faces")
 
 # Resolve models dir relative to backend (parent of app package)
-_MODEL_DIR = Path(__file__).resolve().parent.parent.parent / "models"
-_PROTOTXT = _MODEL_DIR / "deploy.prototxt"
-_CAFFEMODEL = _MODEL_DIR / "res10_300x300_ssd_iter_140000.caffemodel"
+MODEL_DIR = Path(__file__).resolve().parent.parent.parent / "models"
+FACE_MODEL_PROTOTXT = MODEL_DIR / "deploy.prototxt"
+FACE_MODEL_CAFFEMODEL = MODEL_DIR / "res10_300x300_ssd_iter_140000.caffemodel"
 
 log.info("Loading ResNet10 SSD face detector")
-if not _PROTOTXT.exists():
+if not FACE_MODEL_PROTOTXT.exists():
     log.error("Missing face detector prototxt")
-if not _CAFFEMODEL.exists():
+if not FACE_MODEL_CAFFEMODEL.exists():
     log.error("Missing face detector caffemodel")
 
-face_detector_net = cv2.dnn.readNetFromCaffe(str(_PROTOTXT), str(_CAFFEMODEL))
+face_detector_net = cv2.dnn.readNetFromCaffe(str(FACE_MODEL_PROTOTXT), str(FACE_MODEL_CAFFEMODEL))
 log.info("ResNet10 SSD face detector loaded OK")
 
 CONFIDENCE_THRESHOLD = 0.65
@@ -162,7 +162,7 @@ def embed_best_face_from_image(image_bytes: bytes, min_confidence: float | None 
     return emb
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
+def cosine_similarity(a: list[float], b: list[float]) -> float:
     va = np.array(a, dtype=np.float64)
     vb = np.array(b, dtype=np.float64)
     na, nb = np.linalg.norm(va), np.linalg.norm(vb)
@@ -186,7 +186,7 @@ def deduplicate_faces(
             continue
         matched = False
         for cluster in clusters:
-            sim = _cosine(emb, cluster["embedding"])
+            sim = cosine_similarity(emb, cluster["embedding"])
             if sim >= threshold:
                 cluster["timestamps"].append(rec.get("timestamp", 0))
                 cluster["count"] += 1

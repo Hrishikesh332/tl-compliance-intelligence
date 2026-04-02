@@ -31,7 +31,7 @@ def main():
 
     from app.services.s3_store import upload_video, S3_EMBEDDINGS_OUTPUT
     from app.services.bedrock_marengo import start_video_embedding, get_async_invocation, load_video_embeddings_from_s3
-    from app.services.vector_store import add as index_add, list_entries, _index as vs_index, _save as vs_save
+    from app.services.vector_store import add as index_add, list_entries, get_index_records as vs_index, save_index_store as vs_save
 
     # Existing index entries: used to avoid duplicating the same local file on reruns.
     existing = list_entries(type_filter="video")
@@ -51,27 +51,27 @@ def main():
         sys.exit(0)
 
     # Force unbuffered-ish output even when not attached to a TTY
-    def _p(*args):
+    def print_flush(*args):
         print(*args, flush=True)
 
-    _p("Found", len(videos), "video(s) in", video_dir)
+    print_flush("Found", len(videos), "video(s) in", video_dir)
     queued = []
     for path in videos:
         size = path.stat().st_size
         if path.name in existing_filenames:
-            _p("  Skip (already indexed by filename):", path.name)
+            print_flush("  Skip (already indexed by filename):", path.name)
             continue
         if MAX_SIZE_BYTES is not None and size > MAX_SIZE_BYTES:
-            _p("  Skip (over size limit):", path.name)
+            print_flush("  Skip (over size limit):", path.name)
             continue
         try:
-            _p("  Reading:", path.name, "(%.1fMB)" % (size / (1024 * 1024)))
+            print_flush("  Reading:", path.name, "(%.1fMB)" % (size / (1024 * 1024)))
             video_bytes = path.read_bytes()
-            _p("  Uploading:", path.name)
+            print_flush("  Uploading:", path.name)
             info = upload_video(video_bytes, path.name)
             task_id = info["video_id"]
             output_uri = f"{S3_EMBEDDINGS_OUTPUT}/{task_id}"
-            _p("  Starting Bedrock embedding:", path.name)
+            print_flush("  Starting Bedrock embedding:", path.name)
             # Bedrock is easy to throttle; retry with exponential backoff on throttling only.
             result = None
             for attempt in range(1, 8):
@@ -84,7 +84,7 @@ def main():
                     if not is_throttle or attempt >= 7:
                         raise
                     sleep_s = min(90.0, (2 ** (attempt - 1)) * 3.0) + random.uniform(0.0, 1.5)
-                    _p(f"    Throttled by Bedrock (attempt {attempt}/7). Sleeping {sleep_s:.1f}s then retrying...")
+                    print_flush(f"    Throttled by Bedrock (attempt {attempt}/7). Sleeping {sleep_s:.1f}s then retrying...")
                     time.sleep(sleep_s)
             if result is None:
                 raise RuntimeError("Failed to start Bedrock embedding (no result)")
@@ -105,23 +105,23 @@ def main():
                 type="video",
             )
             queued.append({"task_id": task_id, "path_name": path.name})
-            _p("  Queued:", path.name, "->", task_id)
+            print_flush("  Queued:", path.name, "->", task_id)
             # Small spacing between requests reduces throttling likelihood.
             time.sleep(float(os.environ.get("BEDROCK_QUEUE_SLEEP_SEC", "1.5")))
         except Exception as e:
-            _p("  Error", path.name, ":", e)
+            print_flush("  Error", path.name, ":", e)
 
     if not queued:
-        _p("Nothing to wait for.")
+        print_flush("Nothing to wait for.")
         return
 
-    _p("\nWaiting for Bedrock embedding jobs (polling every %s s)..." % POLL_INTERVAL_SEC)
+    print_flush("\nWaiting for Bedrock embedding jobs (polling every %s s)..." % POLL_INTERVAL_SEC)
     start = time.time()
     while time.time() - start < POLL_MAX_WAIT_SEC:
         entries = list_entries(type_filter="video")
         indexing = [e for e in entries if (e.get("metadata") or {}).get("status") == "indexing"]
         if not indexing:
-            _p("All jobs finished.")
+            print_flush("All jobs finished.")
             break
         for e in indexing:
             meta = e.get("metadata") or {}
@@ -151,7 +151,7 @@ def main():
                                     rec.setdefault("metadata", {})["clip_count"] = len(embs)
                                     break
                             vs_save()
-                            _p("  Ready:", meta.get("filename", task_id))
+                            print_flush("  Ready:", meta.get("filename", task_id))
                 elif status == "failed":
                     for rec in vs_index():
                         if rec.get("id") == task_id:
@@ -159,12 +159,12 @@ def main():
                             rec.setdefault("metadata", {})["error"] = inv.get("error", "Unknown")
                             break
                     vs_save()
-                    _p("  Failed:", meta.get("filename", task_id), inv.get("error", ""))
+                    print_flush("  Failed:", meta.get("filename", task_id), inv.get("error", ""))
             except Exception as err:
                 pass
         time.sleep(POLL_INTERVAL_SEC)
     else:
-        _p("Stopped after max wait; some jobs may still be indexing.")
+        print_flush("Stopped after max wait; some jobs may still be indexing.")
 
 
 if __name__ == "__main__":

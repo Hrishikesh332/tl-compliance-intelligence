@@ -14,60 +14,62 @@ S3_BUCKET = os.environ.get("S3_BUCKET", "video-compliance-store")
 ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
 S3_EMBEDDINGS_OUTPUT = os.environ.get("S3_EMBEDDINGS_OUTPUT", f"s3://{S3_BUCKET}/bedrock-output")
 
-_PRESIGNED_URL_EXPIRES = 3600
-_PRESIGNED_CACHE_TTL = _PRESIGNED_URL_EXPIRES - 600
-_presigned_cache: dict[str, tuple[str, float]] = {}
+PRESIGNED_URL_EXPIRES = 3600
+PRESIGNED_CACHE_TTL = PRESIGNED_URL_EXPIRES - 600
+presigned_url_cache: dict[str, tuple[str, float]] = {}
 
 log = logging.getLogger("app.services.s3_store")
 
-_s3_lock = threading.Lock()
-_cached_s3 = None
-_cached_s3_region: str | None = None
+s3_client_lock = threading.Lock()
+cached_s3_client = None
+cached_s3_region: str | None = None
 
 
-def _s3():
+def get_s3_client():
 
-    global _cached_s3, _cached_s3_region
+    global cached_s3_client, cached_s3_region
     region = os.environ.get("AWS_REGION", "us-east-1")
-    if _cached_s3 is not None and _cached_s3_region == region:
-        return _cached_s3
-    with _s3_lock:
-        if _cached_s3 is not None and _cached_s3_region == region:
-            return _cached_s3
+    if cached_s3_client is not None and cached_s3_region == region:
+        return cached_s3_client
+    with s3_client_lock:
+        if cached_s3_client is not None and cached_s3_region == region:
+            return cached_s3_client
         connect_timeout = int(os.environ.get("AWS_CONNECT_TIMEOUT_SEC", "10"))
         read_timeout = int(os.environ.get("AWS_READ_TIMEOUT_SEC", "120"))
         max_attempts = int(os.environ.get("AWS_MAX_ATTEMPTS", "5"))
+        max_pool_connections = int(os.environ.get("AWS_MAX_POOL_CONNECTIONS", "50"))
         cfg = Config(
             region_name=region,
             connect_timeout=connect_timeout,
             read_timeout=read_timeout,
+            max_pool_connections=max_pool_connections,
             retries={"max_attempts": max_attempts, "mode": "adaptive"},
         )
-        _cached_s3 = boto3.client("s3", config=cfg)
-        _cached_s3_region = region
+        cached_s3_client = boto3.client("s3", config=cfg)
+        cached_s3_region = region
         log.info("Created S3 client (region=%s, adaptive retries)", region)
-        return _cached_s3
+        return cached_s3_client
 
 
-class _ProgressLogger:
+class S3ProgressLogger:
     def __init__(self, label: str, total_bytes: int, interval_sec: float = 5.0):
         self.label = label
         self.total = max(int(total_bytes), 0)
         self.interval = float(interval_sec)
-        self._last_log = 0.0
-        self._sent = 0
+        self.last_log_time = 0.0
+        self.bytes_sent = 0
 
     def __call__(self, bytes_amount: int) -> None:
-        self._sent += int(bytes_amount or 0)
+        self.bytes_sent += int(bytes_amount or 0)
         now = time.monotonic()
-        if now - self._last_log < self.interval:
+        if now - self.last_log_time < self.interval:
             return
-        self._last_log = now
+        self.last_log_time = now
         if self.total > 0:
-            pct = (self._sent / self.total) * 100.0
-            log.info("S3 upload progress %s: %.1f%% (%d/%d bytes)", self.label, pct, self._sent, self.total)
+            pct = (self.bytes_sent / self.total) * 100.0
+            log.info("S3 upload progress %s: %.1f%% (%d/%d bytes)", self.label, pct, self.bytes_sent, self.total)
         else:
-            log.info("S3 upload progress %s: %d bytes", self.label, self._sent)
+            log.info("S3 upload progress %s: %d bytes", self.label, self.bytes_sent)
 
 
 def upload_video(file_bytes: bytes, filename: str) -> dict:
@@ -85,8 +87,8 @@ def upload_video(file_bytes: bytes, filename: str) -> dict:
             max_concurrency=int(os.environ.get("S3_MAX_CONCURRENCY", "10")),
             use_threads=True,
         )
-        cb = _ProgressLogger(label=video_id, total_bytes=size, interval_sec=float(os.environ.get("S3_PROGRESS_SEC", "5")))
-        _s3().upload_fileobj(
+        cb = S3ProgressLogger(label=video_id, total_bytes=size, interval_sec=float(os.environ.get("S3_PROGRESS_SEC", "5")))
+        get_s3_client().upload_fileobj(
             Fileobj=io.BytesIO(file_bytes),
             Bucket=S3_BUCKET,
             Key=key,
@@ -110,33 +112,33 @@ def upload_video(file_bytes: bytes, filename: str) -> dict:
 
 def upload_thumbnail(video_id: str, thumb_bytes: bytes) -> str:
     key = f"thumbnails/{video_id}.jpg"
-    _s3().put_object(Bucket=S3_BUCKET, Key=key, Body=thumb_bytes, ContentType="image/jpeg",
+    get_s3_client().put_object(Bucket=S3_BUCKET, Key=key, Body=thumb_bytes, ContentType="image/jpeg",
                      CacheControl="public, max-age=31536000, immutable")
     return key
 
 
 def upload_entity_image(file_bytes: bytes, entity_id: str) -> dict:
     key = f"entities/{entity_id}/face.png"
-    _s3().put_object(Bucket=S3_BUCKET, Key=key, Body=file_bytes, ContentType="image/png")
+    get_s3_client().put_object(Bucket=S3_BUCKET, Key=key, Body=file_bytes, ContentType="image/png")
     return {"s3_key": key, "s3_uri": f"s3://{S3_BUCKET}/{key}"}
 
 
-def get_presigned_url(key: str, expires: int = _PRESIGNED_URL_EXPIRES) -> str:
+def get_presigned_url(key: str, expires: int = PRESIGNED_URL_EXPIRES) -> str:
     now = time.monotonic()
-    cached = _presigned_cache.get(key)
-    if cached and (now - cached[1]) < _PRESIGNED_CACHE_TTL:
+    cached = presigned_url_cache.get(key)
+    if cached and (now - cached[1]) < PRESIGNED_CACHE_TTL:
         return cached[0]
-    url = _s3().generate_presigned_url(
+    url = get_s3_client().generate_presigned_url(
         "get_object",
         Params={"Bucket": S3_BUCKET, "Key": key},
         ExpiresIn=expires,
     )
-    _presigned_cache[key] = (url, now)
+    presigned_url_cache[key] = (url, now)
     return url
 
 
 def list_videos() -> list[dict]:
-    resp = _s3().list_objects_v2(Bucket=S3_BUCKET, Prefix="videos/")
+    resp = get_s3_client().list_objects_v2(Bucket=S3_BUCKET, Prefix="videos/")
     out = []
     for obj in resp.get("Contents", []):
         key = obj["Key"]
