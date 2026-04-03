@@ -26,15 +26,14 @@ from app.utils.video_helpers import (
     get_video_list_cache,
     set_video_list_cache,
     enqueue_bedrock_start,
-    VIDEO_ANALYSIS_PROMPT,
-    VIDEO_ANALYSIS_SCHEMA,
+    get_video_analysis_prompt,
     parse_video_analysis_response,
     normalize_video_analysis,
-    TRANSCRIPT_PROMPT,
+    get_transcript_prompt,
     TRANSCRIPT_SCHEMA,
     parse_transcript_response,
     timestamp_seconds_for_sort,
-    DETECT_PROMPT,
+    get_detect_prompt,
     parse_detect_response,
     save_face_to_disk,
     load_face_from_disk,
@@ -335,7 +334,7 @@ def api_generate_video_analysis(video_id: str):
         t0 = time.perf_counter()
         raw_text = pegasus_analyze_video(
             s3_uri,
-            VIDEO_ANALYSIS_PROMPT,
+            get_video_analysis_prompt(),
             temperature=0,
         )
         log.info("[ANALYSIS] Pegasus response received in %.1fs (len=%d)", time.perf_counter() - t0, len(raw_text or ""))
@@ -421,7 +420,7 @@ def api_video_transcript(video_id: str):
         t0 = time.perf_counter()
         raw = pegasus_analyze_video(
             s3_uri,
-            TRANSCRIPT_PROMPT,
+            get_transcript_prompt(),
             temperature=0,
             response_schema=TRANSCRIPT_SCHEMA,
         )
@@ -705,7 +704,7 @@ def api_video_insights(video_id: str):
         # ────────────────────────────────────────────────────
         log.info("[INSIGHTS] Calling Pegasus DETECT_PROMPT for video_id=%s", video_id)
         t0 = time.perf_counter()
-        raw_response = pegasus_analyze_video(s3_uri, DETECT_PROMPT)
+        raw_response = pegasus_analyze_video(s3_uri, get_detect_prompt())
         log.info("[INSIGHTS] Pegasus response received in %.1fs (%d chars)", time.perf_counter() - t0, len(raw_response or ""))
 
         detect_data = parse_detect_response(raw_response)
