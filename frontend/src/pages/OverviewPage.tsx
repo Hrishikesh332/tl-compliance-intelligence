@@ -9,6 +9,7 @@ import analyzeIconUrl from '../../strand/icons/analyze.svg?url'
 import hourglassIconUrl from '../../strand/icons/hourglass.svg?url'
 import warningIconUrl from '../../strand/icons/warning.svg?url'
 import profileIconUrl from '../../strand/icons/profile.svg?url'
+import workflowDiagramUrl from '../architecture/workflow.png'
 
 function IconArrowRight({ className = 'w-5 h-5' }: { className?: string }) {
   return (
@@ -223,17 +224,11 @@ export default function OverviewPage() {
             </p>
           </div>
           <div className="rounded-2xl border-2 border-dashed border-gray-300 bg-surface flex flex-col items-center justify-center min-h-[320px] sm:min-h-[400px] p-8">
-            <div className="w-14 h-14 rounded-xl bg-card flex items-center justify-center mb-4">
-              <svg className="w-7 h-7 text-text-tertiary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2" />
-                <path d="M3 9h18M9 21V9" />
-              </svg>
-            </div>
-            <p className="text-text-secondary font-medium text-sm">Architecture Diagram</p>
-            <p className="text-text-tertiary text-xs mt-1.5 max-w-xs text-center">
-              Drop your architecture diagram image here or replace this placeholder with an
-              &lt;img&gt; tag pointing to your diagram asset.
-            </p>
+            <img
+              src={workflowDiagramUrl}
+              alt="System workflow architecture"
+              className="w-full h-auto rounded-xl border border-border bg-white object-contain"
+            />
           </div>
         </div>
       </section>
@@ -390,7 +385,7 @@ export default function OverviewPage() {
               <div className="grid grid-cols-2 gap-3">
                 {[
                   { label: 'Marengo Embed', tag: 'Embed', color: 'bg-[var(--strand-product-embed-light)] border-[var(--strand-product-embed)]/30', text: 'text-[var(--strand-product-embed-dark)]', desc: 'Multimodal embeddings for visual + audio search' },
-                  { label: 'Pegasus Generate', tag: 'Generate', color: 'bg-[var(--strand-product-generate-light)] border-[var(--strand-product-generate)]/30', text: 'text-[var(--strand-product-generate-dark)]', desc: 'AI summaries, transcripts, risk analysis' },
+                  { label: 'Pegasus Analyze', tag: 'Analyze', color: 'bg-[var(--strand-product-generate-light)] border-[var(--strand-product-generate)]/30', text: 'text-[var(--strand-product-generate-dark)]', desc: 'AI summaries, transcripts, risk analysis' },
                   { label: 'Semantic Search', tag: 'Search', color: 'bg-[var(--strand-product-search-light)] border-[var(--strand-product-search)]/30', text: 'text-[var(--strand-product-search-dark)]', desc: 'Natural language video search' },
                   { label: 'Face Matching', tag: 'Entity', color: 'bg-[var(--strand-ui-accent-light)] border-[var(--strand-ui-accent)]/30', text: 'text-[var(--strand-ui-accent-hover)]', desc: 'Person tracking via face embeddings' },
                 ].map((c, i) => (
