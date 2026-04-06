@@ -9,3 +9,6 @@ openai
 gunicorn
 requests
 apscheduler>=3.10.0
+nv-ingest
+nv-ingest-api
+nv-ingest-client

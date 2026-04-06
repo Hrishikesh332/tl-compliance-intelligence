@@ -1,8 +1,3 @@
-# Optional: NeMo Retriever document extraction (nv-ingest + Ray).
-# Required only for document upload/ingest (extract text from PDFs, etc.).
-# Not needed for video compliance or document search; not installable on some
-# cloud platforms (e.g. Render) where Ray has no wheels. Install in addition
-# to requirements.txt only in environments where Ray is available (e.g. local).
 -r requirements.txt
 nv-ingest
 nv-ingest-api
