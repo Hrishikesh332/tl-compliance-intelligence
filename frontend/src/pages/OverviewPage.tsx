@@ -121,12 +121,12 @@ export default function OverviewPage() {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3 shrink-0">
-              <a
-                href="#demo-video"
-                className="inline-flex items-center gap-2 h-10 px-5 rounded-xl border border-border text-text-primary font-semibold text-sm hover:bg-card transition-colors"
+              <Link
+                to="/dashboard"
+                className="inline-flex items-center gap-2 h-10 px-5 rounded-xl border border-[var(--strand-ui-accent)] bg-[var(--strand-ui-accent)] text-brand-charcoal font-semibold text-sm hover:bg-[var(--strand-ui-accent-hover)] hover:border-[var(--strand-ui-accent-hover)] transition-colors"
               >
-                Watch Demo
-              </a>
+                Explore Dashboard
+              </Link>
               <a
                 href="https://github.com/Hrishikesh332/tl-compliance-intelligence"
                 target="_blank"
